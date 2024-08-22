@@ -1,2 +1,5 @@
 Chains/
 Results/
+*.err
+*.out
+
