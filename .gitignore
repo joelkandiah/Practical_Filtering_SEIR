@@ -2,4 +2,4 @@ Chains/
 Results/
 *.err
 *.out
-
+.vscode/

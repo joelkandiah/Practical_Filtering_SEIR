@@ -16,14 +16,16 @@ using JLD2
 using AdvancedMH
 using DynamicHMC
 
-@assert length(ARGS) == 6
+@assert length(ARGS) == 7
 
+# Read parameters from command line for the varied submission scripts
 seed_idx = parse(Int, ARGS[1])
 Δ_βt = parse(Int, ARGS[2])
 Window_size = parse(Int, ARGS[3])
 Data_update_window = parse(Int, ARGS[4])
 n_chains = parse(Int, ARGS[5])
 discard_init = parse(Int, ARGS[6])
+tmax = parse(Float64, ARGS[7])
 
 # List the seeds to generate a set of data scenarios (for reproducibility)
 seeds_list = [1234, 1357, 2358, 3581]
@@ -35,7 +37,6 @@ seeds_list = [1234, 1357, 2358, 3581]
 Random.seed!(seeds_list[seed_idx])
 
 # Set and Create locations to save the plots and Chains
-# TODO: Move the parameters Δ_βt and L here 
 outdir = string("Results/10bp 1e6/Plot attempt $seed_idx/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/")
 tmpstore = string("Chains/10bp 1e6/$seed_idx/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/")
 
@@ -47,7 +48,6 @@ if !isdir(tmpstore)
 end
 
 # Initialise the model parameters (fixed)
-tmax = 392.0
 tspan = (0.0, tmax)
 obstimes = 1.0:1.0:tmax
 N = 1_000_000.0
@@ -63,7 +63,7 @@ p = [γ, σ, N];
 β₀σ²= 0.15
 β₀μ = 0.14
 βσ² = 0.15
-true_beta = repeat([NaN], div(Integer(tmax), Δ_βt) + 1)
+true_beta = repeat([NaN], Integer(ceil(tmax/ Δ_βt)) + 1)
 true_beta[1] = exp(rand(Normal(log(β₀μ), β₀σ²)))
 for i in 2:(length(true_beta) - 1)
     # true_beta[i] = exp(log(true_beta[i-1]) + rand(Normal(0.0,1.0)))
@@ -71,6 +71,7 @@ for i in 2:(length(true_beta) - 1)
 end 
 true_beta[length(true_beta)] = true_beta[length(true_beta)-1]
 knots = collect(0.0:Δ_βt:tmax)
+knots = knots[end] != tmax ? vcat(knots, tmax) : tmax
 K = length(knots)
 
 # Construct function to evaluate the ODE model for the SEIR model
