@@ -71,7 +71,7 @@ for i in 2:(length(true_beta) - 1)
 end 
 true_beta[length(true_beta)] = true_beta[length(true_beta)-1]
 knots = collect(0.0:Δ_βt:tmax)
-knots = knots[end] != tmax ? vcat(knots, tmax) : tmax
+knots = knots[end] != tmax ? vcat(knots, tmax) : knots
 K = length(knots)
 
 # Construct function to evaluate the ODE model for the SEIR model
@@ -360,7 +360,7 @@ end;
 
 
 knots_window = collect(0:Δ_βt:Window_size)
-knots_window = knots_window[end] != Window_size ? vcat(knots_window, Window_size) : Window_size
+knots_window = knots_window[end] != Window_size ? vcat(knots_window, Window_size) : knots_window
 K_window = length(knots_window)
 conv_mat_window = construct_pmatrix(inf_to_hosp_array_cdf, Window_size)
 obstimes_window = 1.0:1.0:Window_size
