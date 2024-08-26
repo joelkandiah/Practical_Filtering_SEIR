@@ -675,10 +675,32 @@ for idx_time in 2:length(each_end_time)
     plot!(R_dat[1:curr_t], linesize = 3)
     savefig(string(outdir,"recoveries_nuts_window_$idx_time","_$seed_idx","_90.png"))
 
-    logjoint(bayes_sir_tvp_init(Y[1:curr_t], K_window;
+    joint_dens_array = logjoint(bayes_sir_tvp_init(Y[1:curr_t], K_window;
             conv_mat = conv_mat_window,
             knots = knots_window,
             obstimes = obstimes_window), Chains(generate_quants_params, Chain_symb_names))
+
+    histogram(joint_dens_array; normalize = :pdf)
+    density!(joint_dens_array)
+    savefig(string(outdir,"logjoint__window_$idx_time","_$seed_idx",".png"))
+    
+    lik_dens_array = DynamicPPL.loglikelihood(bayes_sir_tvp_init(Y[1:curr_t], K_window;
+            conv_mat = conv_mat_window,
+            knots = knots_window,
+            obstimes = obstimes_window), Chains(generate_quants_params, Chain_symb_names))
+
+    histogram(lik_dens_array; normalize = :pdf)
+    density!(lik_dens_array)
+    savefig(string(outdir,"loglikelihood_window_$idx_time","_$seed_idx",".png"))
+    
+    prior_dens_array = logprior(bayes_sir_tvp_init(Y[1:curr_t], K_window;
+            conv_mat = conv_mat_window,
+            knots = knots_window,
+            obstimes = obstimes_window), Chains(generate_quants_params, Chain_symb_names))
+
+    histogram(prior_dens_array; normalize = :pdf)
+    density!(prior_dens_array)
+    savefig(string(outdir,"logprior_window_$idx_time","_$seed_idx",".png"))
 
 end
 
