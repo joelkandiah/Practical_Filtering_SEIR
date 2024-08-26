@@ -546,25 +546,45 @@ for idx_time in 2:length(each_end_time)
         end
     end;
     
-
-    Threads.@threads for i in 1:n_chains
-        I₀_init = init_I₀[i]
-        β_hist = list_prev_β[i,1:n_old_betas]
-        use_params = rand(Normal(0, 0.2), window_betas)
-        if(n_prev_betas > n_old_betas)
-            use_params[1:(n_prev_betas - n_old_betas)] .= log_init_β_params[i,(1+n_old_betas):end]
+    if(n_old_betas == 0)
+        Threads.@threads for i in 1:n_chains
+            I₀_init = init_I₀[i]
+            use_params = rand(Normal(0, 0.2), window_betas)
+            use_params[1:(n_prev_betas)] .= log_init_β_params[i,1:end]
+            chn_list[i] = sample(DynamicPPL.fix(bayes_sir_tvp_init(Y[1:curr_t], K_window;
+                conv_mat = conv_mat_window,
+                knots = knots_window,
+                obstimes = obstimes_window), log_I₀ = log(I₀_init / N)),
+                Turing.NUTS(),
+                MCMCSerial(), 1, 1;
+                discard_initial = discard_init,
+                thinning = 1,
+                init_parameters = (use_params,))
+            new_betas_i = exp.(cumsum(Array(chn_list[i])[1,:]))
+            list_β[i] =  new_betas_i
         end
-        chn_list[i] = sample(bayes_sir_tvp(Y[1:curr_t], β_hist, I₀_init, K_window;
-            conv_mat = conv_mat_window,
-            knots = knots_window,
-            obstimes = obstimes_window),
-            Turing.NUTS(),
-            MCMCSerial(), 1, 1;
-            discard_initial = discard_init,
-            thinning = 1,
-            init_parameters = (use_params,))
-        new_betas_i = exp.(log(β_hist[end]) .+ cumsum(Array(chn_list[i])[1,:]))
-        list_β[i] = vcat(β_hist, new_betas_i)
+
+    else
+        Threads.@threads for i in 1:n_chains
+            I₀_init = init_I₀[i]
+            β_hist = list_prev_β[i,1:n_old_betas]
+            use_params = rand(Normal(0, 0.2), window_betas)
+            if(n_prev_betas > n_old_betas)
+                use_params[1:(n_prev_betas - n_old_betas)] .= log_init_β_params[i,(1+n_old_betas):end]
+            end
+            chn_list[i] = sample(bayes_sir_tvp(Y[1:curr_t], β_hist, I₀_init, K_window;
+                conv_mat = conv_mat_window,
+                knots = knots_window,
+                obstimes = obstimes_window),
+                Turing.NUTS(),
+                MCMCSerial(), 1, 1;
+                discard_initial = discard_init,
+                thinning = 1,
+                init_parameters = (use_params,))
+            new_betas_i = exp.(log(β_hist[end]) .+ cumsum(Array(chn_list[i])[1,:]))
+            list_β[i] = vcat(β_hist, new_betas_i)
+        end
+
     end
 
     list_β_conv = mapreduce(x -> x, hcat, list_β)'
