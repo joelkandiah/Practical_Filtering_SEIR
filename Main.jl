@@ -675,6 +675,11 @@ for idx_time in 2:length(each_end_time)
     plot!(R_dat[1:curr_t], linesize = 3)
     savefig(string(outdir,"recoveries_nuts_window_$idx_time","_$seed_idx","_90.png"))
 
+    logjoint(bayes_sir_tvp_init(Y[1:curr_t], K_window;
+            conv_mat = conv_mat_window,
+            knots = knots_window,
+            obstimes = obstimes_window), Chains(generate_quants_params, Chain_symb_names))
+
 end
 
 # Combine the lists of betas by window (to overlap plots)
@@ -696,7 +701,9 @@ for my_idx in 1:length(each_end_time)
         title="Estimates of β")
     if(my_idx > 1)
         for idx_time in 2:my_idx
-            beta_idxs = vcat(collect(1:length(0:Δ_βt:each_end_time[idx_time])-1), length(0:Δ_βt:each_end_time[idx_time])-1)
+            knots_plot = collect(0:Δ_βt:each_end_time[idx_time])
+            knots_plot = knots_plot[end] != each_end_time[idx_time] ? vcat(knots_plot, each_end_time[idx_time]) : knots_plot
+            beta_idxs = vcat(1:length(knots_plot)-1, length(knots_plot)-1)
             beta_win_μ = [quantile(array_each_window_β[idx_time][:,i], 0.5) for i in beta_idxs]
             betas_win_lci = [quantile(array_each_window_β[idx_time][:,i], 0.025) for i in beta_idxs]
             betas_win_uci = [quantile(array_each_window_β[idx_time][:,i], 0.975) for i in beta_idxs]
@@ -742,4 +749,3 @@ plot!(obstimes,
     color=:red,
     label="True β")
 savefig(string(outdir,"recoveries_nuts_window_combined","_$seed_idx","_90.png"))
-
