@@ -15,6 +15,7 @@ using MCMCChainsStorage
 using JLD2
 using AdvancedMH
 using DynamicHMC
+using ProgressMeter
 
 @assert length(ARGS) == 7
 
@@ -394,7 +395,7 @@ ode_nuts = sample(bayes_sir_tvp_init(Y[1:Window_size], K_window;
     conv_mat = conv_mat_window,
     knots = knots_window,
     obstimes = obstimes_window,
-    ), Turing.NUTS(1, 0.65), MCMCThreads(), 1, 1, discard_initial = 0, thinning = 1)
+    ), Turing.NUTS(1, 0.65), MCMCThreads(), 1, 1, discard_initial = 0, thinning = 1);
 
 name_map_correct_order = ode_nuts.name_map.parameters
 
@@ -403,7 +404,7 @@ ode_nuts = sample(bayes_sir_tvp_init(Y[1:Window_size], K_window;
     conv_mat = conv_mat_window,
     knots = knots_window,
     obstimes = obstimes_window,
-    ), Turing.NUTS(1000, 0.65), MCMCThreads(), 1, n_chains, discard_initial = discard_init, thinning = 10)
+    ), Turing.NUTS(1000, 0.65), MCMCThreads(), 1, n_chains, discard_initial = discard_init, thinning = 10);
 
 # Write the results of the chain to a file
 h5open(string(tmpstore,"chn_1_$seed_idx.h5"), "w") do f
@@ -568,7 +569,7 @@ for idx_time in 2:length(each_end_time)
     # Check if we have betas to store (if not only fix the initial number of infecteds?? TODO: still inferrinf initial infecteds due to errors in uncertainty)
     if(n_old_betas == 0)
         # Loop over chains and sample parameters independently
-        Threads.@threads for i in 1:n_chains
+        @showprogress Threads.@threads for i in 1:n_chains
             # Fix parameters that are "old" and set any remaining values as the startpoints for the chain
             I₀_init = init_I₀[i]
             use_params = rand(Normal(0, 0.2), window_betas)
@@ -581,8 +582,9 @@ for idx_time in 2:length(each_end_time)
                 MCMCSerial(), 1, 1;
                 discard_initial = discard_init,
                 thinning = 10,
-                init_parameters = (use_params,)
-                )
+                init_parameters = (use_params,),
+                progress = false
+                );
             # Store betas
             new_betas_i = exp.(cumsum(Array(chn_list[i])[1,:]))
             list_β[i] =  new_betas_i
@@ -590,7 +592,7 @@ for idx_time in 2:length(each_end_time)
 
     else
         # Loop over chains and sample parameters independently
-        Threads.@threads for i in 1:n_chains
+        @showprogress Threads.@threads for i in 1:n_chains
             # Fix parameters that are "old" and set any remaining values as the startpoints for the chain
             I₀_init = init_I₀[i]
             β_hist = list_prev_β[i,1:n_old_betas]
@@ -606,7 +608,8 @@ for idx_time in 2:length(each_end_time)
                 MCMCSerial(), 1, 1;
                 discard_initial = discard_init,
                 thinning = 10,
-                init_parameters = (use_params,))
+                init_parameters = (use_params,),
+                progress=false);
             # Store betas
             new_betas_i = exp.(log(β_hist[end]) .+ cumsum(Array(chn_list[i])[1,:]))
             list_β[i] = vcat(β_hist, new_betas_i)
@@ -745,7 +748,8 @@ for my_idx in 1:length(each_end_time)
         xlabel = "Time",
         ylabel = "β",
         label="Window 1",
-        title="Estimates of β")
+        title="Estimates of β",
+        legend = :outerbottom)
     if(my_idx > 1)
         for idx_time in 2:my_idx
             knots_plot = collect(0:Δ_βt:each_end_time[idx_time])
