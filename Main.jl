@@ -114,7 +114,8 @@ sol_ode = solve(prob_ode,
 plot(stack(map(x -> x[1:4], sol_ode.u))',
     xlabel="Time",
     ylabel="Number",
-    labels=["S" "E" "I" "R"])
+    labels=["S" "E" "I" "R"], linewidth = 1)
+
 
 # Find the cumulative number of cases
 I_tot = [0; Array(sol_ode(obstimes))[5,:]] # Cumulative cases
@@ -491,6 +492,7 @@ plot!(obstimes[1:Window_size],
     betat(true_beta, obstimes[1:Window_size]),
     color=:red,
     label="True β")
+plot!(size = (1200,800))
 
 savefig(string(outdir,"nuts_betas_window_1_$seed_idx.png"))
 
@@ -498,6 +500,7 @@ savefig(string(outdir,"nuts_betas_window_1_$seed_idx.png"))
 confint = generate_confint_infec_init(ode_nuts,Y[1:Window_size],K_window, conv_mat_window, knots_window, obstimes_window)
 plot(confint.medci_inf, ribbon = (confint.medci_inf - confint.lowci_inf, confint.uppci_inf - confint.medci_inf) , legend = false)
 plot!(I_dat[1:Window_size], linesize = 3)
+plot!(size = (1200,800))
 
 savefig(string(outdir,"infections_nuts_window_1_$seed_idx.png"))
 
@@ -505,6 +508,7 @@ savefig(string(outdir,"infections_nuts_window_1_$seed_idx.png"))
 confint = generate_confint_recov_init(ode_nuts,Y[1:Window_size],K_window, conv_mat_window, knots_window, obstimes_window)
 plot(confint.medci_inf, ribbon = (confint.medci_inf - confint.lowci_inf, confint.uppci_inf - confint.medci_inf)  , legend = false)
 plot!(R_dat[1:Window_size], linesize = 3)
+plot!(size = (1200,800))
 
 savefig(string(outdir,"recoveries_nuts_window_1_$seed_idx.png"))
 
@@ -641,6 +645,7 @@ for idx_time in 2:length(each_end_time)
         betat_no_win(true_beta, obstimes_window);
         color=:red,
         label="True β")
+    plot!(size = (1200,800))
 
     savefig(string(outdir,"β_nuts_window","$idx_time","_$seed_idx","_95.png"))
 
@@ -665,6 +670,7 @@ for idx_time in 2:length(each_end_time)
     
     plot(infs.medci_inf, ribbon = (infs.medci_inf -infs.lowci_inf, infs.uppci_inf - infs.medci_inf) , legend = false)
     plot!(I_dat[1:curr_t], linesize = 3)
+    plot!(size = (1200,800))
     savefig(string(outdir,"infections_nuts_window_$idx_time","_$seed_idx","_95.png"))
 
     recovers = generate_confint_recov_init(
@@ -677,6 +683,7 @@ for idx_time in 2:length(each_end_time)
     
     plot(recovers.medci_inf, ribbon = (recovers.medci_inf -recovers.lowci_inf, recovers.uppci_inf - recovers.medci_inf) , legend = false)
     plot!(R_dat[1:curr_t], linesize = 3)
+    plot!(size = (1200,800))
     savefig(string(outdir,"recoveries_nuts_window_$idx_time","_$seed_idx","_95.png"))
 
     infs = generate_confint_infec_init(
@@ -689,6 +696,7 @@ for idx_time in 2:length(each_end_time)
     
     plot(infs.medci_inf, ribbon = (infs.medci_inf -infs.lowci_inf, infs.uppci_inf - infs.medci_inf) , legend = false)
     plot!(I_dat[1:curr_t], linesize = 3)
+    plot!(size = (1200,800))
     savefig(string(outdir,"infections_nuts_window_$idx_time","_$seed_idx","_90.png"))
 
     recovers = generate_confint_recov_init(
@@ -701,6 +709,7 @@ for idx_time in 2:length(each_end_time)
     
     plot(recovers.medci_inf, ribbon = (recovers.medci_inf -recovers.lowci_inf, recovers.uppci_inf - recovers.medci_inf) , legend = false)
     plot!(R_dat[1:curr_t], linesize = 3)
+    plot!(size = (1200,800))
     savefig(string(outdir,"recoveries_nuts_window_$idx_time","_$seed_idx","_90.png"))
 
     joint_dens_array = logjoint(bayes_sir_tvp_init(Y[1:curr_t], K_window;
@@ -771,6 +780,7 @@ for my_idx in 1:length(each_end_time)
         betat(true_beta, obstimes),
         color=:red,
         label="True β")
+    plot!(size = (1200,800))
 
     savefig(string(outdir,"recoveries_nuts_window_combined","$my_idx","_$seed_idx","_95.png"))
 end
@@ -799,4 +809,5 @@ plot!(obstimes,
     betat(true_beta, obstimes),
     color=:red,
     label="True β")
+    plot!(size = (1200,800))
 savefig(string(outdir,"recoveries_nuts_window_combined","_$seed_idx","_90.png"))
