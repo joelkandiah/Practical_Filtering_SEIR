@@ -189,6 +189,11 @@ plot!(obstimes, Y_mu, legend=false)
 
 # Store ODE system parameters in a dictionary and write to a file
 params = Dict(
+    "seed" => seeds_list[seed_idx],
+    "Window_size" => Window_size,
+    "Data_update_window" => Data_update_window,
+    "n_chains" => n_chains,
+    "discard_init" => discard_init,
     "tmax" => tmax,
     "N" => N,
     "I0" => I0,
