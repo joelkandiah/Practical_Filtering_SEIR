@@ -568,7 +568,6 @@ for idx_time in 2:length(each_end_time)
             I₀_init = init_I₀[i]
             use_params = rand(Normal(0, 0.2), window_betas)
             use_params[1:(n_prev_betas)] .= log_init_β_params[i,1:end]
-            use_params = vcat(I₀_init, use_params)
             chn_list[i] = sample(DynamicPPL.fix(bayes_sir_tvp_init(Y[1:curr_t], K_window;
                 conv_mat = conv_mat_window,
                 knots = knots_window,
@@ -577,7 +576,7 @@ for idx_time in 2:length(each_end_time)
                 MCMCSerial(), 1, 1;
                 discard_initial = discard_init,
                 thinning = 10,
-                # init_parameters = (use_params,)
+                init_parameters = (use_params,)
                 )
             # Store betas
             new_betas_i = exp.(cumsum(Array(chn_list[i])[1,:]))
