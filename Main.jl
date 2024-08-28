@@ -560,7 +560,7 @@ for idx_time in 2:length(each_end_time)
         end
     end;
     
-    # Check if we have betas to store (if not only fix the initial number of infecteds)
+    # Check if we have betas to store (if not only fix the initial number of infecteds?? TODO: still inferrinf initial infecteds due to errors in uncertainty)
     if(n_old_betas == 0)
         # Loop over chains and sample parameters independently
         Threads.@threads for i in 1:n_chains
@@ -568,15 +568,17 @@ for idx_time in 2:length(each_end_time)
             I₀_init = init_I₀[i]
             use_params = rand(Normal(0, 0.2), window_betas)
             use_params[1:(n_prev_betas)] .= log_init_β_params[i,1:end]
+            use_params = vcat(I₀_init, use_params)
             chn_list[i] = sample(DynamicPPL.fix(bayes_sir_tvp_init(Y[1:curr_t], K_window;
                 conv_mat = conv_mat_window,
                 knots = knots_window,
                 obstimes = obstimes_window), log_I₀ = log(I₀_init / N)),
-                Turing.NUTS(),
+                Turing.NUTS(1000, 0.65),
                 MCMCSerial(), 1, 1;
                 discard_initial = discard_init,
-                thinning = 1,
-                init_parameters = (use_params,))
+                thinning = 10,
+                # init_parameters = (use_params,)
+                )
             # Store betas
             new_betas_i = exp.(cumsum(Array(chn_list[i])[1,:]))
             list_β[i] =  new_betas_i
@@ -596,10 +598,10 @@ for idx_time in 2:length(each_end_time)
                 conv_mat = conv_mat_window,
                 knots = knots_window,
                 obstimes = obstimes_window),
-                Turing.NUTS(),
+                Turing.NUTS(1000,0.65),
                 MCMCSerial(), 1, 1;
                 discard_initial = discard_init,
-                thinning = 1,
+                thinning = 10,
                 init_parameters = (use_params,))
             # Store betas
             new_betas_i = exp.(log(β_hist[end]) .+ cumsum(Array(chn_list[i])[1,:]))
@@ -616,6 +618,25 @@ for idx_time in 2:length(each_end_time)
 
     # Prepare betas for the next window period
     global list_prev_β = list_β_conv
+
+    beta_idxs = vcat(1:length(knots_window)-1, length(knots_window)-1)
+    beta_win_μ = [quantile(list_β_conv[:,i], 0.5) for i in beta_idxs]
+    betas_win_lci = [quantile(list_β_conv[:,i], 0.025) for i in beta_idxs]
+    betas_win_uci = [quantile(list_β_conv[:,i], 0.975) for i in beta_idxs]
+    plot(obstimes_window,
+        betat(beta_win_μ, obstimes_window);
+        ribbon = (betat(beta_win_μ, obstimes_window) - betat(betas_win_lci, obstimes_window), betat(betas_win_uci, obstimes_window) - betat(beta_win_μ, obstimes_window)),
+        xlabel = "Time",
+        ylabel = "β",
+        label="Window $idx_time",
+    )
+    plot!(obstimes_window,
+        betat_no_win(true_beta, obstimes_window);
+        color=:red,
+        label="True β")
+
+    savefig(string(outdir,"β_nuts_window","$idx_time","_$seed_idx","_95.png"))
+
 
     # Combine parameters to be able to generate samples
     generate_quants_params = hcat(ode_nuts_arr[:,1], list_β_conv)
