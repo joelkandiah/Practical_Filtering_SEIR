@@ -34,8 +34,8 @@ seeds_list = [1234, 1357, 2358, 3581]
 Random.seed!(seeds_list[seed_idx])
 
 # Set and Create locations to save the plots and Chains
-outdir = string("Results/10bp 1e6/Plot attempt $seed_idx/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/")
-tmpstore = string("Chains/10bp 1e6/$seed_idx/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/")
+outdir = string("Results/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/Plot attempt $seed_idx/")
+tmpstore = string("Chains/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/Plot attempt $seed_idx/")
 
 if !isdir(outdir)
     mkpath(outdir)
