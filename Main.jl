@@ -58,14 +58,14 @@ inv_σ = 3
 p = [γ, σ, N];
 
 # Set parameters for inference and draw betas from prior
-β₀σ²= 0.15
+β₀σ= 0.15
 β₀μ = 0.14
-βσ² = 0.15
+βσ = 0.0866
 true_beta = repeat([NaN], Integer(ceil(tmax/ Δ_βt)) + 1)
-true_beta[1] = exp(rand(Normal(log(β₀μ), β₀σ²)))
+true_beta[1] = exp(rand(Normal(log(β₀μ), β₀σ)))
 for i in 2:(length(true_beta) - 1)
     # true_beta[i] = exp(log(true_beta[i-1]) + rand(Normal(0.0,1.0)))
-    true_beta[i] = exp(log(true_beta[i-1]) + rand(Normal(0.0,βσ²)))
+    true_beta[i] = exp(log(true_beta[i-1]) + rand(Normal(0.0,βσ)))
 end 
 true_beta[length(true_beta)] = true_beta[length(true_beta)-1]
 knots = collect(0.0:Δ_βt:tmax)
@@ -205,8 +205,8 @@ params = Dict(
     "Δ_βt" => Δ_βt,
     "knots" => knots,
     "inital β mean" => β₀μ,
-    "initial β sd" => β₀σ²,
-    "β sd" => βσ²,
+    "initial β sd" => β₀σ,
+    "β sd" => βσ,
     "Gamma alpha" => inf_to_hosp.α,
     "Gamma theta" => inf_to_hosp.θ
 )
@@ -244,10 +244,10 @@ prob_tvp = ODEProblem(sir_tvp_ode_no_win!,
     p = Vector{T}(undef, K+3)
     log_β = Vector{T}(undef, K-2)
     p[1:3] .= [γ, σ, N]
-    log_β₀ ~ Normal(log(0.4), 0.2)
+    log_β₀ ~ Normal(log(0.4), β₀σ)
     p[4] = exp(log_β₀)
     for i in 5:K+2
-        log_β[i-4] ~ Normal(0.0, 0.2)
+        log_β[i-4] ~ Normal(0.0, βσ)
         p[i] = exp(log(p[i-1]) + log_β[i-4])
     end
     p[K+3] = p[K+2]
@@ -316,7 +316,7 @@ end;
     prev_length=length(β_prev)
     p[4:prev_length+3] .= β_prev
     for i in prev_length+4:K+2
-        log_β[i-prev_length-3] ~ Normal(0.0, 0.2)
+        log_β[i-prev_length-3] ~ Normal(0.0, βσ)
         p[i] = exp(log(p[i-1]) + log_β[i-prev_length-3])
     end
     p[K+3] = p[K+2]
@@ -576,7 +576,7 @@ for idx_time in 2:length(each_end_time)
         @showprogress Threads.@threads for i in 1:n_chains
             # Fix parameters that are "old" and set any remaining values as the startpoints for the chain
             I₀_init = init_I₀[i]
-            use_params = rand(Normal(0, 0.2), window_betas)
+            use_params = rand(Normal(0, βσ), window_betas)
             use_params[1:(n_prev_betas)] .= log_init_β_params[i,1:end]
             chn_list[i] = sample(DynamicPPL.fix(bayes_sir_tvp_init(Y[1:curr_t], K_window;
                 conv_mat = conv_mat_window,
@@ -600,7 +600,7 @@ for idx_time in 2:length(each_end_time)
             # Fix parameters that are "old" and set any remaining values as the startpoints for the chain
             I₀_init = init_I₀[i]
             β_hist = list_prev_β[i,1:n_old_betas]
-            use_params = rand(Normal(0, 0.2), window_betas)
+            use_params = rand(Normal(0, βσ), window_betas)
             if(n_prev_betas > n_old_betas)
                 use_params[1:(n_prev_betas - n_old_betas)] .= log_init_β_params[i,(1+n_old_betas):end]
             end

@@ -2,8 +2,8 @@
 #SBATCH -J trial_hpc_batch
 #SBATCH -A MRC-BSU-SL2-CPU
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=40
-#SBATCH --time=30:00:00
+#SBATCH --cpus-per-task=25
+#SBATCH --time=10:00:00
 #! What types of email messages do you wish to receive?
 #SBATCH --mail-type=BEGIN
 #SBATCH --mail-type=FAIL
@@ -21,4 +21,4 @@
 #SBATCH --output=sliding_window_%j_%a.out
 #SBATCH --error=sliding_window_%j_%a.err
 
-julia --project -t ${SLURM_CPUS_PER_TASK} Main.jl ${SLURM_ARRAY_TASK_ID} 14 1220 60 200 150 392
+julia --project -t ${SLURM_CPUS_PER_TASK} Main.jl ${SLURM_ARRAY_TASK_ID} 40 120 60 200 150 400
