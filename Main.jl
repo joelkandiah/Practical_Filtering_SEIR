@@ -16,6 +16,8 @@ using JLD2
 using AdvancedMH
 using DynamicHMC
 using ProgressMeter
+using BenchmarkTools
+
 
 @assert length(ARGS) == 7
 
@@ -34,9 +36,11 @@ seeds_list = [1234, 1357, 2358, 3581]
 # Set seed
 Random.seed!(seeds_list[seed_idx])
 
+n_threads = Threads.nthreads()
+
 # Set and Create locations to save the plots and Chains
-outdir = string("Results/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/Plot attempt $seed_idx/")
-tmpstore = string("Chains/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/Plot attempt $seed_idx/")
+outdir = string("Results/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+tmpstore = string("Chains/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
 
 if !isdir(outdir)
     mkpath(outdir)
@@ -60,7 +64,7 @@ p = [γ, σ, N];
 # Set parameters for inference and draw betas from prior
 β₀σ= 0.15
 β₀μ = 0.14
-βσ = 0.0866
+βσ = 0.15
 true_beta = repeat([NaN], Integer(ceil(tmax/ Δ_βt)) + 1)
 true_beta[1] = exp(rand(Normal(log(β₀μ), β₀σ)))
 for i in 2:(length(true_beta) - 1)
@@ -97,7 +101,7 @@ function sir_tvp_ode_no_win!(du, u, p_, t)
 end;
 
 # Initialise the specific values for the ODE system and solve
-prob_ode = ODEProblem(sir_tvp_ode_no_win!, u0, tspan, [p..., true_beta...])
+prob_ode = ODEProblem(sir_tvp_ode_no_win!, u0, tspan, vcat(p, true_beta))
 #? Note the choice of tstops and d_discontinuities to note the changepoints in β
 #? Also note the choice of solver to resolve issues with the "stiffness" of the ODE system
 sol_ode = solve(prob_ode,
@@ -401,11 +405,14 @@ ode_nuts = sample(bayes_sir_tvp_init(Y[1:Window_size], K_window;
 name_map_correct_order = ode_nuts.name_map.parameters
 
 # Perform the chosen inference algorithm
+t1_init = time_ns()
 ode_nuts = sample(bayes_sir_tvp_init(Y[1:Window_size], K_window;
     conv_mat = conv_mat_window,
     knots = knots_window,
     obstimes = obstimes_window,
     ), Turing.NUTS(1000, 0.65), MCMCThreads(), 1, n_chains, discard_initial = discard_init, thinning = 10);
+t2_init = time_ns()
+runtime_init = convert(Int64, t2_init-t1_init)
 
 # Write the results of the chain to a file
 h5open(string(tmpstore,"chn_1_$seed_idx.h5"), "w") do f
@@ -520,6 +527,11 @@ each_end_time = collect(Window_size:Data_update_window:tmax)
 each_end_time = each_end_time[end] ≈ tmax ? each_end_time : vcat(each_end_time, tmax)
 each_end_time = Integer.(each_end_time)
 
+algorithm_times = Vector{Float64}(undef, length(each_end_time))
+algorithm_times[1] = runtime_init
+
+algorithm_times_each_sample = Vector{Vector}(undef, length(each_end_time)-1)
+
 # Create stores for parameters on each "chain"
 init_I₀ = exp.(ode_nuts_arr[:,1]) .* N
 list_prev_β = exp.(cumsum(ode_nuts_arr[:, 2:end], dims = 2))
@@ -529,6 +541,7 @@ for idx_time in 2:length(each_end_time)
     # Initialise containers for the results (no data race one value per chain to be written)
     chn_list = Vector{Chains}(undef, n_chains)
     list_β = Vector{Vector}(undef, n_chains)
+    algorithm_times_curr_sample = Vector{Float64}(undef, n_chains)
 
     # Determine which betas to fix and which ones to sample
     curr_t = each_end_time[idx_time]
@@ -573,11 +586,13 @@ for idx_time in 2:length(each_end_time)
     # Check if we have betas to store (if not only fix the initial number of infecteds?? TODO: still inferrinf initial infecteds due to errors in uncertainty)
     if(n_old_betas == 0)
         # Loop over chains and sample parameters independently
+        t1 = time_ns()
         @showprogress Threads.@threads for i in 1:n_chains
             # Fix parameters that are "old" and set any remaining values as the startpoints for the chain
             I₀_init = init_I₀[i]
             use_params = rand(Normal(0, βσ), window_betas)
             use_params[1:(n_prev_betas)] .= log_init_β_params[i,1:end]
+            t1_curr = time_ns()
             chn_list[i] = sample(DynamicPPL.fix(bayes_sir_tvp_init(Y[1:curr_t], K_window;
                 conv_mat = conv_mat_window,
                 knots = knots_window,
@@ -589,13 +604,18 @@ for idx_time in 2:length(each_end_time)
                 init_parameters = (use_params,),
                 progress = false
                 );
+            t2_curr = time_ns()
+            algorithm_times_curr_sample[i] = convert(Int64, t2_curr - t1_curr)
             # Store betas
             new_betas_i = exp.(cumsum(Array(chn_list[i])[1,:]))
             list_β[i] =  new_betas_i
         end
-
+        t2 = time_ns()
+        algorithm_times[idx_time] = convert(Int64, t2 - t1)
+        algorithm_times_each_sample[idx_time-1] = algorithm_times_curr_sample
     else
         # Loop over chains and sample parameters independently
+        t1 = time_ns()
         @showprogress Threads.@threads for i in 1:n_chains
             # Fix parameters that are "old" and set any remaining values as the startpoints for the chain
             I₀_init = init_I₀[i]
@@ -604,6 +624,7 @@ for idx_time in 2:length(each_end_time)
             if(n_prev_betas > n_old_betas)
                 use_params[1:(n_prev_betas - n_old_betas)] .= log_init_β_params[i,(1+n_old_betas):end]
             end
+            t1_curr = time_ns()
             chn_list[i] = sample(bayes_sir_tvp(Y[1:curr_t], β_hist, I₀_init, K_window;
                 conv_mat = conv_mat_window,
                 knots = knots_window,
@@ -614,11 +635,15 @@ for idx_time in 2:length(each_end_time)
                 thinning = 10,
                 init_parameters = (use_params,),
                 progress=false);
+            t2_curr = time_ns()
+            algorithm_times_curr_sample[i] = convert(Int64, t2_curr - t1_curr)
             # Store betas
             new_betas_i = exp.(log(β_hist[end]) .+ cumsum(Array(chn_list[i])[1,:]))
             list_β[i] = vcat(β_hist, new_betas_i)
         end
-
+        t2 = time_ns()
+        algorithm_times[idx_time] = convert(Int64, t2 - t1)
+        algorithm_times_each_sample[idx_time-1] = algorithm_times_curr_sample
     end
 
     # Convert vector of vectors to matrix
@@ -811,3 +836,12 @@ plot!(obstimes,
     label="True β")
     plot!(size = (1200,800))
 savefig(string(outdir,"recoveries_nuts_window_combined","_$seed_idx","_90.png"))
+
+params = Dict(
+    "algorithm_times" => algorithm_times,
+    "algorithm_times_each_sample" => algorithm_times_each_sample
+    )
+
+open(string(outdir, "timings.toml"), "w") do io
+        TOML.print(io, params)
+end
