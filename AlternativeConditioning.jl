@@ -89,7 +89,7 @@ function sir_tvp_ode_no_win!(du, u, p_, t)
     (S, E, I, R, I_tot) = u
     (γ, σ, N) = p_[1:3]
     βt = betat_no_win(p_[4:end], t)
-    infection = βt*S*I/N
+    infection = (1-(1-βt/N)^I)*S
     infectious = σ*E
     recovery = γ*I
     @inbounds begin
@@ -116,10 +116,10 @@ sol_ode = solve(prob_ode,
             d_discontinuities = knots);
 
 # Optionally plot the SEIR system
-plot(stack(map(x -> x[1:4], sol_ode.u))',
+plot(stack(map(x -> x[2:4], sol_ode.u))',
     xlabel="Time",
     ylabel="Number",
-    labels=["S" "E" "I" "R"], linewidth = 1)
+    labels=["E" "I" "R"], linewidth = 1)
 
 
 # Find the cumulative number of cases
@@ -250,7 +250,7 @@ prob_tvp = ODEProblem(sir_tvp_ode_no_win!,
         (S, E, I, R, I_tot) = u
         (γ, σ, N) = p_[1:3]
         βt = model_betat(p_[4:end], t)
-        infection = βt*S*I/N
+        infection = (1-(1-βt/N)^I)*S
         infectious = σ*E
         recovery = γ*I
         @inbounds begin
@@ -336,6 +336,9 @@ ode_prior = sample(bayes_sir_tvp(K_window;
 
 name_map_correct_order = ode_prior.name_map.parameters
 
+discard_init = 0
+n_chains = 10
+
 # Perform the chosen inference algorithm
 t1_init = time_ns()
 ode_nuts = sample(bayes_sir_tvp( K_window;
@@ -416,26 +419,32 @@ end
 
 beta_μ, betas_lci, betas_uci = get_beta_quantiles(ode_nuts, K_window)
 
+using Plots.PlotMeasures
 # Plot the betas (and uncertainty)
 plot(obstimes[1:Window_size],
     betat_no_win(beta_μ, obstimes[1:Window_size]),
+    ribbon = (betat_no_win(beta_μ, obstimes[1:Window_size]) - betat_no_win(betas_lci, obstimes[1:Window_size]), betat_no_win(betas_uci, obstimes[1:Window_size]) - betat_no_win(beta_μ, obstimes[1:Window_size])),
     xlabel = "Time",
     ylabel = "β",
     label="Using the NUTS algorithm",
-    title="Estimates of β",
-    color=:blue)
-plot!(obstimes[1:Window_size],
-    betat_no_win(betas_lci, obstimes[1:Window_size]),
-    alpha = 0.3,
-    fillrange = betat_no_win(betas_uci, obstimes[1:Window_size]),
-    fillalpha = 0.3,
+    title="\nEstimates of β",
     color=:blue,
-    label="95% credible intervals")
+    lw = 2,
+    titlefontsize=18,
+    guidefontsize=18,
+    tickfontsize=16,
+    legendfontsize=12,
+    fillalpha = 0.4,
+    legendposition = :outerbottom,
+    margin = 10mm,
+    bottom_margin = 0mm)
 plot!(obstimes[1:Window_size],
     betat_no_win(true_beta, obstimes[1:Window_size]),
     color=:red,
-    label="True β")
+    label="True β",
+    lw = 2)
 plot!(size = (1200,800))
+
 
 savefig(string(outdir,"nuts_betas_window_1_$seed_idx.png"))
 
@@ -548,7 +557,7 @@ for idx_off_by_one in eachindex(each_end_time[2:end])
                 MCMCSerial(), 1, 1;
                 discard_initial = discard_init,
                 thinning = 10,
-                init_parameters = (use_params,),
+                init_params = (use_params,),
                 progress=false);
             # t2_curr = time_ns()
             # local old_names = names(iter_params)
@@ -691,8 +700,21 @@ for my_idx in 1:length(each_end_time)
         xlabel = "Time",
         ylabel = "β",
         label="Window 1",
-        title="Estimates of β",
-        legend = :outerbottom)
+        title="\nEstimates of β",
+        color=:blue,
+        xlimits=(0, each_end_time[end]),
+        ylimits=(0.11, 0.19),
+        lw = 2,
+        titlefontsize=18,
+        guidefontsize=18,
+        tickfontsize=16,
+        legendfontsize=12,
+        fillalpha = 0.4,
+        legendposition = :outerbottom,
+        # legendtitleposition = :left,
+        margin = 10mm,
+        bottom_margin = 0mm,
+        legend_column = min(my_idx + 1, 4))
     if(my_idx > 1)
         for idx_time in 2:my_idx
             knots_plot = collect(0:Δ_βt:each_end_time[idx_time])
@@ -701,17 +723,20 @@ for my_idx in 1:length(each_end_time)
             plot!(obstimes[1:each_end_time[idx_time]],
                 betat_no_win(beta_win_μ, obstimes[1:each_end_time[idx_time]]),
                 ribbon = (betat_no_win(beta_win_μ, obstimes[1:each_end_time[idx_time]]) - betat_no_win(betas_win_lci, obstimes[1:each_end_time[idx_time]]), betat_no_win(betas_win_uci, obstimes[1:each_end_time[idx_time]]) - betat_no_win(beta_win_μ, obstimes[1:each_end_time[idx_time]])),
-                xlabel = "Time",
-                ylabel = "β",
+                # xlabel = "Time",
+                # ylabel = "β",
                 label="Window $idx_time",
+                lw=2
                 )
         end
     end 
     plot!(obstimes,
         betat_no_win(true_beta, obstimes),
         color=:red,
-        label="True β")
+        label="True β", lw = 2)
     plot!(size = (1200,800))
+    plot!([60], seriestype="vline", color = :black, label = missing, linestyle = :dash, lw = 4)
+
 
     savefig(string(outdir,"recoveries_nuts_window_combined","$my_idx","_$seed_idx","_95.png"))
 end
@@ -724,3 +749,47 @@ params = Dict(
 open(string(outdir, "timings.toml"), "w") do io
         TOML.print(io, params)
 end
+
+
+get_beta_vals = function(chn, K; ci = 0.95)
+# Get the beta values and calculate the estimated confidence interval and median
+    betas = Array(chn)
+    beta_idx = [collect(2:K); K]
+
+    betas[:,2:end] =exp.(cumsum(betas[:,2:end], dims = 2))
+    return betas[:,beta_idx]
+end
+
+betas_matrix = get_beta_vals(list_chains[2],length(knots_plot))
+
+            knots_plot = collect(0:Δ_βt:each_end_time[2])
+            knots_plot = knots_plot[end] != each_end_time[2] ? vcat(knots_plot, each_end_time[2]) : knots_plot
+
+# plot(0:0.2:each_end_time[2],
+#     map(x -> betat_no_win(x, 0:0.2:each_end_time[2]), eachrow(betas_matrix)),
+#     xlabel = "Time",
+#         ylabel = "β",
+#         # label="Window 1",
+#         title="\nEstimates of β",
+#         # color=:blue,
+#         xlimits=(0, each_end_time[end]),
+#         ylimits=(0.11, 0.19),
+#         lw = 2.5,
+#         titlefontsize=18,
+#         guidefontsize=18,
+#         tickfontsize=16,
+#         legendfontsize=12,
+#         linealpha = 0.2,
+#         legendposition = :none,
+#         # legendtitleposition = :left,
+#         margin = 10mm,
+#         bottom_margin = 10mm,
+#         # legend_column = min(my_idx + 1, 4)
+#     )
+# plot!(obstimes,
+#     betat_no_win(true_beta, obstimes),
+#     color=:red,
+#     label="True β", lw = 2)
+# plot!(size = (1200,800))
+# plot!([60], seriestype="vline", color = :black, label = missing, linestyle = :dash, lw = 4)
+# savefig(string(outdir,"test_nuts_window_combined","2","_$seed_idx","_95.png"))
