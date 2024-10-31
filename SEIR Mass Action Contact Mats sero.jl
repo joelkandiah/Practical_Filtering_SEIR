@@ -34,6 +34,8 @@ n_chains = parse(Int, ARGS[5])
 discard_init = parse(Int, ARGS[6])
 tmax = parse(Float64, ARGS[7])
 
+tmax_int = Integer(tmax)
+
 # List the seeds to generate a set of data scenarios (for reproducibility)
 seeds_list = [1234, 1357, 2358, 3581]
 
@@ -129,7 +131,7 @@ NR = 1
 params_test = idd_params(p, ConstantInterpolation(true_beta, knots), NR, C)
 
 # Initialise the specific values for the ODE system and solve
-prob_ode = ODEProblem(sir_tvp_ode!, u0', tspan, params_test)
+prob_ode = ODEProblem(sir_tvp_ode!, u0', tspan, params_test);
 #? Note the choice of tstops and d_discontinuities to note the changepoints in β
 #? Also note the choice of solver to resolve issues with the "stiffness" of the ODE system
 sol_ode = solve(prob_ode,
@@ -215,8 +217,7 @@ function construct_pmatrix(
     return sparse(ret_mat)
 end
 
-conv_mat
-IFR_vec = [0.0001, 0.001, 0.001, 0.005, 0.006, 0.01, 0.06, 0.12]
+IFR_vec = [0.0000078, 0.0000078, 0.000017, 0.000038, 0.00028, 0.0041, 0.025, 0.12]
 
 # (conv_mat * (IFR_vec .* X)')' ≈ mapreduce(x -> conv_mat * x, hcat, eachrow( IFR_vec .* X))'
 # Evaluate mean number of hospitalisations (using proportion of 0.3)
@@ -272,7 +273,7 @@ sero_spec = 0.9430569
 using DelimitedFiles
 sample_sizes = readdlm("Serosamples_N/region_1.txt", Int64)
 
-sample_sizes = sample_sizes[1:tmax+1,:]'
+sample_sizes = sample_sizes[1:length(obstimes)+1,:]'
 
 sus_pop = stack(map(x -> x[1,:], sol_ode.u))
 sus_pop_mask = sample_sizes .!= 0
@@ -286,7 +287,7 @@ sample_sizes_non_zero = @view sample_sizes[sus_pop_mask]
     )
 )
 
-obs_exp = zeros(NA, tmax+1)
+obs_exp = zeros(NA, length(obstimes)+1)
 
 obs_exp[sus_pop_mask] = 💉 ./ sample_sizes_non_zero
 
@@ -502,15 +503,15 @@ model_window = model_window_unconditioned| (y = Y[:,1:Window_size],
 )
 
 
-@code_warntype model_window.f(
-    model_window,
-    Turing.VarInfo(model_window),
-    # Turing.SamplingContext(
-    #     Random.default_rng(), Turing.SampleFromPrior(), Turing.DefaultContext()
-    # ),
-    Turing.DefaultContext(),
-    model_window.args...
-)
+# @code_warntype model_window.f(
+#     model_window,
+#     Turing.VarInfo(model_window),
+#     # Turing.SamplingContext(
+#     #     Random.default_rng(), Turing.SampleFromPrior(), Turing.DefaultContext()
+#     # ),
+#     Turing.DefaultContext(),
+#     model_window.args...
+# )
 
 name_map_correct_order = ode_prior.name_map.parameters
 
@@ -528,7 +529,7 @@ density!(loglikvals)
 
 # plot(ode_nuts[450:end,:,:])
 
-# plot(loglikvals[150:end,:])
+plot(loglikvals[200:end,:])
 # savefig(string("loglikvals_try_fix_I0_$seed_idx.png"))
 
 
@@ -797,7 +798,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     savefig(string(outdir,"β_nuts_window","$idx_time","_$seed_idx","_95.png"))
 
     # Plot infections
-    confint = generate_confint_infec_init(list_chains[idx_time], model_window)
+    local confint = generate_confint_infec_init(list_chains[idx_time], model_window)
 
     plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
     plot!(I_dat[:,1:curr_t]', linewidth = 2, color = :red)
@@ -807,7 +808,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     savefig(string(outdir,"infections_nuts_window","$idx_time","_$seed_idx","_95.png"))
 
     # Plot recoveries
-    confint = generate_confint_recov_init(list_chains[idx_time], model_window)
+    local confint = generate_confint_recov_init(list_chains[idx_time], model_window)
 
     plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
     plot!(R_dat[:,1:curr_t]', linewidth = 2, color = :red)
@@ -819,7 +820,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     # Plot hospitalisations
     confint = generate_confint_hosps_init(list_chains[idx_time], model_window_unconditioned)
 
-    plot_obj_vec = Vector{Plots.Plot}(undef, NA)
+    local plot_obj_vec = Vector{Plots.Plot}(undef, NA)
 
     for i in eachindex(plot_obj_vec)
         plot_part = scatter(1:curr_t, confint.medci_hosps[i,:], yerr = (confint.medci_hosps[i,:] .- confint.lowci_hosps[i,:], confint.uppci_hosps[i,:] .- confint.medci_hosps[i,:]), legend = false)
@@ -832,10 +833,10 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
 
     # Plot serological data
 
-    plot_obj_vec = Vector{Plots.Plot}(undef, NA)
-    confint = generate_confint_sero_init(list_chains[idx_time], model_window_unconditioned, sus_pop_mask_window, sample_sizes_non_zero_window)
-    obs_exp_window = obs_exp[:,1:curr_t]
-    obs_exp_window[.!sus_pop_mask_window] .= NaN
+    local plot_obj_vec = Vector{Plots.Plot}(undef, NA)
+    local confint = generate_confint_sero_init(list_chains[idx_time], model_window_unconditioned, sus_pop_mask_window, sample_sizes_non_zero_window)
+    local obs_exp_window = obs_exp[:,1:curr_t]
+    local obs_exp_window[.!sus_pop_mask_window] .= NaN
 
     for i in eachindex(plot_obj_vec)
         plot_part = scatter(1:curr_t, confint.medci_sero[i,:], yerr = (confint.medci_sero[i,:] .- confint.lowci_sero[i,:], confint.uppci_sero[i,:] .- confint.medci_sero[i,:]), legend = false)
@@ -847,7 +848,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     savefig(string(outdir,"serological_nuts_window","$idx_time","_$seed_idx","_95.png"))
 
     # Check logjoint
-    loglikvals = logjoint(model_window, list_chains[idx_time])
+    local loglikvals = logjoint(model_window, list_chains[idx_time])
     histogram(loglikvals; normalize = :pdf)
 
 
