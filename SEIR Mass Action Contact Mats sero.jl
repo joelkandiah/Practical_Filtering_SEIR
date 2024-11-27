@@ -45,8 +45,8 @@ Random.seed!(seeds_list[seed_idx])
 n_threads = Threads.nthreads()
 
 # Set and Create locations to save the plots and Chains
-outdir = string("Results/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
-tmpstore = string("Chains/10bp 1e6/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+outdir = string("Results/10bp reg1 disps fail/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+tmpstore = string("Chains/10bp reg1 disps fail/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
 
 if !isdir(outdir)
     mkpath(outdir)
@@ -135,19 +135,19 @@ prob_ode = ODEProblem(sir_tvp_ode!, u0', tspan, params_test);
 #? Note the choice of tstops and d_discontinuities to note the changepoints in β
 #? Also note the choice of solver to resolve issues with the "stiffness" of the ODE system
 sol_ode = solve(prob_ode,
-            Tsit5(),
+            Tsit5(; thread = OrdinaryDiffEq.False()),
             # callback = cb,
             saveat = 1.0,
             tstops = knots[2:end-1],
             d_discontinuities = knots);
 
-# Optionally plot the SEIR system
-plot(stack(map(x -> x[3,:], sol_ode.u))',
+# Optionally StatsPlots.plot the SEIR system
+StatsPlots.plot(stack(map(x -> x[3,:], sol_ode.u))',
     xlabel="Time",
     ylabel="Number",
     linewidth = 1)
-plot!(size = (1200,800))
-savefig(string("SEIR_system_wth_CM2_older_infec_$seed_idx.png"))
+StatsPlots.plot!(size = (1200,800))
+# savefig(string("SEIR_system_wth_CM2_older_infec_$seed_idx.png"))
 
 # Find the cumulative number of cases
 
@@ -218,6 +218,7 @@ function construct_pmatrix(
 end
 
 IFR_vec = [0.0000078, 0.0000078, 0.000017, 0.000038, 0.00028, 0.0041, 0.025, 0.12]
+# [0.00001, 0.0001, 0.0005,......., 0.01, 0.06, 0.1]
 
 # (conv_mat * (IFR_vec .* X)')' ≈ mapreduce(x -> conv_mat * x, hcat, eachrow( IFR_vec .* X))'
 # Evaluate mean number of hospitalisations (using proportion of 0.3)
@@ -231,13 +232,15 @@ function NegativeBinomial3(μ, ϕ)
     return NegativeBinomial(r, p)
 end
 
-# Draw sample of hospitalisations
-Y = @. rand(NegativeBinomial3(Y_mu + 1e-3, 10));
+η = rand(Gamma(1,0.2))
 
-# Plot mean hospitalisations over hospitalisations
+# Draw sample of hospitalisations
+Y = @. rand(NegativeBinomial3(Y_mu + 1e-3, η));
+
+# StatsPlots.plot mean hospitalisations over hospitalisations
 bar(obstimes, Y', legend=true, alpha = 0.3)
-plot!(obstimes, eachrow(Y_mu))
-plot!(size = (1200,800))
+StatsPlots.plot!(obstimes, eachrow(Y_mu))
+StatsPlots.plot!(size = (1200,800))
 # Store ODE system parameters in a dictionary and write to a file
 params = Dict(
     "seed" => seeds_list[seed_idx],
@@ -291,7 +294,7 @@ obs_exp = zeros(NA, length(obstimes)+1)
 
 obs_exp[sus_pop_mask] = 💉 ./ sample_sizes_non_zero
 
-scatter(obs_exp', legend = true)
+StatsPlots.scatter(obs_exp', legend = true)
 
 # Define the model taking in the data and the times the beta values changepoints
 # Add named args for fixed ODE parameters and for the convolution matrix, the times the beta values change and the specific times for evaluating the ODE
@@ -324,30 +327,27 @@ scatter(obs_exp', legend = true)
 ) where {T_β <: Real, T_I <: Real, T_u0 <: Real, T_Seir <: Real}
 
     # Set prior for initial infected
-    log_I₀  ~ Normal(I0_μ_prior, 0.2)
+    log_I₀  ~ truncated(Normal(I0_μ_prior, 0.2);
+     lower = log(1/N),
+      upper = 0.0)
     I = exp(log_I₀) * N
 
-    if(I < 1)
-        if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        end
-    end
-    
     I_list = zero(Vector{T_I}(undef, NA))
     I_list[5] = I
     u0 = zero(Matrix{T_u0}(undef, 5, NA))
     u0[1,:] = NA_N - I_list
     u0[3,:] = I_list
-    
+
+    η ~ Gamma(1,0.2)
 
     # Set priors for betas
     ## Note how we clone the endpoint of βt
     β = Vector{T_β}(undef, K)
     log_β = Vector{T_β}(undef, K-2)
     p = [γ, σ, N]
-    log_β₀ ~ Normal(β₀μ, β₀σ)
-    # βₜ σ ~ Gamma(0.1,100)
+    log_β₀ ~ truncated(Normal(β₀μ, β₀σ);
+    #  upper=log(1 / maximum(C * 0.22 / N))
+     )
     βₜσ = βσ
     β[1] = exp(log_β₀)
     for i in 2:K-1
@@ -356,11 +356,18 @@ scatter(obs_exp', legend = true)
     end
     β[K] = β[K-1]
 
-    if(any(β .>  1 / maximum(C * 0.22 / N)) | any(isnan.(β)))
-        if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+    if(I < 1)
+        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
-        end
+        # end
+    end
+
+    if(any(β .>  1 / maximum(C * 0.22 / N)) | any(isnan.(β)))
+        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+            @DynamicPPL.addlogprob! -Inf
+            return
+        # end
     end
 
     params_test = idd_params(p, ConstantInterpolation(β, knots), 1, C) 
@@ -374,7 +381,7 @@ scatter(obs_exp', legend = true)
     sol = 
         # try
         solve(prob,
-            AutoTsit5(Rosenbrock32()),
+            Tsit5(),
             saveat = obstimes,
             # maxiters = 1e7,
             d_discontinuities = knots[2:end-1],
@@ -394,10 +401,10 @@ scatter(obs_exp', legend = true)
     # end
 
     if any(sol.retcode != :Success)
-        if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
-        end
+        # end
     end
     
     ## Calculate new infections per day, X
@@ -405,10 +412,10 @@ scatter(obs_exp', legend = true)
         rowadjdiff
     # println(sol_X)
     if (any(sol_X .< -(1e-3)) | any(stack(sol.u)[3,:,:] .< -1e-3))
-        if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
-        end
+        # end
     end
     # check = minimum(sol_X)
     # println(check)
@@ -418,13 +425,13 @@ scatter(obs_exp', legend = true)
     # Assume Poisson distributed counts
     ## Calculate number of timepoints
     if (any(isnan.(y_μ)))
-        if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
-        end
+        # end
     end
     # y = Array{T_y}(undef, NA, length(obstimes))
-    y ~ product_distribution(@. NegativeBinomial3(y_μ + 1e-3, 10))
+    y ~ product_distribution(@. NegativeBinomial3(y_μ + 1e-3, η))
 
 
     # Introduce Serological data into the model (for the first region)
@@ -472,7 +479,7 @@ ode_prior = sample(bayes_sir_tvp(K_window,
         β₀σ,
         βσ,
         IFR_vec
-    ) | (y = Y[:,1:Window_size],
+    ) | (y = Y[:,1:length(obstimes_window)],
      z = 💉[1:length(sample_sizes_non_zero_window)]
      ), Prior(), 1, discard_initial = 0, thinning = 1);
 
@@ -498,7 +505,7 @@ model_window_unconditioned = bayes_sir_tvp(K_window,
     IFR_vec
     ) 
 
-model_window = model_window_unconditioned| (y = Y[:,1:Window_size],
+model_window = model_window_unconditioned| (y = Y[:,1:length(obstimes_window)],
     z = 💉[1:length(sample_sizes_non_zero_window)]
 )
 
@@ -513,6 +520,12 @@ model_window = model_window_unconditioned| (y = Y[:,1:Window_size],
 #     model_window.args...
 # )
 
+# ode_test = sample(model_window
+#      , Turing.NUTS(1000, 0.65;), MCMCThreads(), discard_init, n_chains, discard_initial = 0, thinning = 1);
+
+# ode_test_2 = sample(model_window
+#      , Turing.NUTS(2000, 0.65;), MCMCThreads(), discard_init, n_chains, discard_initial = 0, thinning = 1);
+
 name_map_correct_order = ode_prior.name_map.parameters
 
 # Perform the chosen inference algorithm
@@ -522,15 +535,44 @@ ode_nuts = sample(model_window
 t2_init = time_ns()
 runtime_init = convert(Int64, t2_init-t1_init)
 
+using JLD2
+#save chain_for_densities
+# JLD2.write(string(tmpstore, "ode_nuts.jld2"), "ode_nuts", ode_nuts)
+# save(string(tmpstore, "ode_nuts.jld2"), "ode_nuts", ode_nuts)
+# ode_nuts = load(string(tmpstore, "ode_nuts.jld2"),)["ode_nuts"]
+#save test chain
+# JLD2.write(string(tmpstore, "ode_test.jld2"), "ode_test", ode_test)
+# save(string(tmpstore, "ode_test.jld2"), "ode_test", ode_test)
+# ode_test = load(string(tmpstore, "ode_test.jld2"),)["ode_test"]
+#save test chain
+# JLD2.write(string(tmpstore, "ode_test_2.jld2"), "ode_test_2", ode_test_2)
+# save(string(tmpstore, "ode_test_2.jld2"), "ode_test_2", ode_test_2)
+# ode_test_2 = load(string(tmpstore, "ode_test_2.jld2"),)["ode_test_2"]
+
+# ode_nuts = ode_test
 # Plots to aid in diagnosing issues with convergence
 loglikvals = logjoint(model_window, ode_nuts)
-histogram(loglikvals; normalize = :pdf)
-density!(loglikvals)
+# loglikvalstest = logjoint(model_window, ode_test)
+# loglikvalstest2 = logjoint(model_window, ode_test_2)
+StatsPlots.histogram(loglikvals; normalize = :pdf)
+StatsPlots.density!(loglikvals)
 
 # plot(ode_nuts[450:end,:,:])
 
-plot(loglikvals[200:end,:])
+# StatsPlots.plot(loglikvals[150:500,1])
+# StatsPlots.plot(loglikvalstest[250:500,:])
 # savefig(string("loglikvals_try_fix_I0_$seed_idx.png"))
+
+using CairoMakie
+using PairPlots
+
+# create list of chains to plot
+# listochains = [ode_nuts[150:end,:,i] for i in 1:n_chains ]
+
+# pairplot(ode_nuts[250:end,:,2:end]; legend = false)
+# pairplot(ode_test[250:end,:,2:end]; legend = false)
+# pairplot(listochains[2:end]...)
+# pairplot(ode_nuts[250:end,:,2:end], ode_test[250:end,:,:])
 
 
 # Create a function to take in the chains and evaluate the number of infections and summarise them (at a specific confidence level)
@@ -567,9 +609,9 @@ R_dat = Array(sol_ode(obstimes))[4,:,:] # Population of recovereds at times
 get_beta_quantiles = function(chn, K; ci = 0.95)
     # Get the beta values and calculate the estimated confidence interval and median
         betas = Array(chn)
-        beta_idx = [collect(2:K); K]
+        beta_idx = [collect(3:K+1); K+1]
     
-        betas[:,2:end] .= exp.(cumsum(betas[:,2:end], dims = 2))
+        betas[:,3:end] .= exp.(cumsum(betas[:,3:end], dims = 2))
 
         beta_μ = [quantile(betas[:,i], 0.5) for i in beta_idx]
         betas_lci = [quantile(betas[:,i], (1 - ci) / 2) for i in beta_idx]
@@ -581,7 +623,7 @@ beta_μ, betas_lci, betas_uci = get_beta_quantiles(ode_nuts[end,:,:], K_window)
 
 betat_no_win = ConstantInterpolation(true_beta, knots)
 
-plot(obstimes[1:Window_size],
+StatsPlots.plot(obstimes[1:Window_size],
     ConstantInterpolation(beta_μ, knots_window)(obstimes[1:Window_size]),
     ribbon = (ConstantInterpolation(beta_μ, knots_window)(obstimes[1:Window_size]) - ConstantInterpolation(betas_lci, knots_window)(obstimes[1:Window_size]), ConstantInterpolation(betas_uci, knots_window)(obstimes[1:Window_size]) - ConstantInterpolation(beta_μ, knots_window)(obstimes[1:Window_size])),
     xlabel = "Time",
@@ -598,12 +640,12 @@ plot(obstimes[1:Window_size],
     legendposition = :outerbottom,
     margin = 10mm,
     bottom_margin = 0mm)
-plot!(obstimes[1:Window_size],
+StatsPlots.plot!(obstimes[1:Window_size],
     betat_no_win(obstimes[1:Window_size]),
     color=:red,
     label="True β",
     lw = 2)
-plot!(size = (1200,800))
+StatsPlots.plot!(size = (1200,800))
 
 
 savefig(string(outdir,"nuts_betas_window_1_$seed_idx.png"))
@@ -611,17 +653,17 @@ savefig(string(outdir,"nuts_betas_window_1_$seed_idx.png"))
 
 # Plot the infecteds
 confint = generate_confint_infec_init(ode_nuts[end,:,:], model_window)
-plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
-plot!(I_dat[:,1:Window_size]', linewidth = 2, color = :red)
-plot!(size = (1200,800))
+StatsPlots.plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
+StatsPlots.plot!(I_dat[:,1:Window_size]', linewidth = 2, color = :red)
+StatsPlots.plot!(size = (1200,800))
 
 savefig(string(outdir,"infections_nuts_window_1_$seed_idx.png"))
 
 # Plot the recovereds
 confint = generate_confint_recov_init(ode_nuts[end,:,:],model_window)
-plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf')  , legend = false)
-plot!(R_dat[:,1:Window_size]', linewidth = 2, color = :red)
-plot!(size = (1200,800))
+StatsPlots.plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf')  , legend = false)
+StatsPlots.plot!(R_dat[:,1:Window_size]', linewidth = 2, color = :red)
+StatsPlots.plot!(size = (1200,800))
 
 savefig(string(outdir,"recoveries_nuts_window_1_$seed_idx.png"))
 
@@ -643,10 +685,13 @@ confint = generate_confint_hosps_init(ode_nuts[end,:,:], model_window_unconditio
 
 plot_obj_vec = Vector{Plots.Plot}(undef, NA)
 for i in eachindex(plot_obj_vec)
-    plot_part = scatter(1:Window_size, confint.medci_hosps[i,:], yerr = (confint.medci_hosps[i,:] .- confint.lowci_hosps[i,:], confint.uppci_hosps[i,:] .- confint.medci_hosps[i,:]), legend = false)
-    plot_obj_vec[i] = scatter!(plot_part,1:Window_size, Y[i,1:Window_size], color = :red, legend = false)
+    plot_part = StatsPlots.scatter(1:Window_size, confint.medci_hosps[i,:], yerr = (confint.medci_hosps[i,:] .- confint.lowci_hosps[i,:], confint.uppci_hosps[i,:] .- confint.medci_hosps[i,:]), legend = false)
+    plot_obj_vec[i] = StatsPlots.scatter!(plot_part,1:Window_size, Y[i,1:Window_size], color = :red, legend = false)
 end
-plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
+StatsPlots.plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
+
+# Save plot
+savefig(string(outdir,"hospitalisations_nuts_window_1_$seed_idx.png"))
 
 # Write a function to return the ci for the Serological data
 function generate_confint_sero_init(chn, model, bitmatrix_nonzero, denoms; cri = 0.95)
@@ -678,14 +723,17 @@ obs_exp_window = obs_exp[:,1:Window_size]
 obs_exp_window[.!sus_pop_mask_window] .= NaN
 # plot the Serological data
 for i in eachindex(plot_obj_vec)
-    plot_part = scatter(1:Window_size, confint.medci_sero[i,:], yerr = (confint.medci_sero[i,:] .- confint.lowci_sero[i,:], confint.uppci_sero[i,:] .- confint.medci_sero[i,:]), legend = false)
-    plot_obj_vec[i] = scatter!(plot_part, 1:Window_size, obs_exp_window[i,:], color = :red, legend = false)
+    plot_part = StatsPlots.scatter(1:Window_size, confint.medci_sero[i,:], yerr = (confint.medci_sero[i,:] .- confint.lowci_sero[i,:], confint.uppci_sero[i,:] .- confint.medci_sero[i,:]), legend = false)
+    plot_obj_vec[i] = StatsPlots.scatter!(plot_part, 1:Window_size, obs_exp_window[i,:], color = :red, legend = false)
 end
-plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
+StatsPlots.plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
+
+# Save plot
+savefig(string(outdir,"sero_nuts_window_1_$seed_idx.png"))
 
 
 # Convert the samples to an array
-ode_nuts_arr = Array(ode_nuts)
+ode_nuts_arr = Array(ode_nuts[end,:,:])
 
 # Create an array to store the window ends to know when to run the model
 each_end_time = collect(Window_size:Data_update_window:tmax)
@@ -698,12 +746,23 @@ algorithm_times[1] = runtime_init * 60
 
 # Construct store for the resulting chains
 list_chains = Vector{Chains}(undef, length(each_end_time))
-list_chains[1] = ode_nuts
+list_chains[1] = ode_nuts[end,:,:]
 
 # Define function to determine the names of the parameters in the model for some number of betas
-get_params_varnames = function(n_old_betas)
+get_params_varnames_fix = function(n_old_betas)
     params_return = Vector{Turing.VarName}()
     if(n_old_betas >= 0) append!(params_return,[@varname(log_I₀)]) end
+    if(n_old_betas >= 1) append!(params_return, [@varname(log_β₀)]) end
+    if(n_old_betas >= 2)
+        append!(params_return, [@varname(log_β[beta_idx]) for beta_idx ∈ 1:(n_old_betas - 1)])
+    end
+         
+    return params_return
+end
+
+get_params_varnames_all = function(n_old_betas)
+    params_return = Vector{Turing.VarName}()
+    if(n_old_betas >= 0) append!(params_return,[@varname(log_I₀), @varname(η)]) end
     if(n_old_betas >= 1) append!(params_return, [@varname(log_β₀)]) end
     if(n_old_betas >= 2)
         append!(params_return, [@varname(log_β[beta_idx]) for beta_idx ∈ 1:(n_old_betas - 1)])
@@ -728,13 +787,13 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     local conv_mat_window = construct_pmatrix(inf_to_hosp_array_cdf, curr_t)
     local obstimes_window = 1.0:1.0:curr_t
 
-    local sus_pop_mask_window = sus_pop_mask[:,1:curr_t]
-    local sample_sizes_non_zero_window = @view sample_sizes[:,1:curr_t][sus_pop_mask_window]
+    local sus_pop_mask_window = sus_pop_mask[:,1:length(obstimes_window)]
+    local sample_sizes_non_zero_window = @view sample_sizes[:,1:length(obstimes_window)][sus_pop_mask_window]
 
-    window_param_names = get_params_varnames(Int(ceil(curr_t / Δ_βt)))
-    fixed_param_names = get_params_varnames(n_old_betas)
+    window_param_names = get_params_varnames_all(Int(ceil(curr_t / Δ_βt)))
+    fixed_param_names = get_params_varnames_fix(n_old_betas)
 
-    y_data_window = Y[:,1:curr_t]
+    y_data_window = Y[:,1:length(obstimes_window)]
     z_data_window = 💉[1:length(sample_sizes_non_zero_window)]
 
     local model_window_unconditioned = bayes_sir_tvp(K_window,
@@ -770,7 +829,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
             fixed_param_names,
             window_param_names,
             list_chains[idx_time - 1],
-            NUTS(1500,0.65)
+            NUTS(2000,0.65)
         ),
         MCMCThreads(),
         n_chains;
@@ -782,27 +841,30 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     # Plot betas
     beta_win_μ, betas_win_lci, betas_win_uci = get_beta_quantiles(list_chains[idx_time], K_window)
 
-    plot(obstimes_window,
+    StatsPlots.plot(obstimes_window,
     ConstantInterpolation(beta_win_μ, knots_window)(obstimes_window),
     ribbon = (ConstantInterpolation(beta_win_μ, knots_window)(obstimes_window) - ConstantInterpolation(betas_win_lci, knots_window)(obstimes_window), ConstantInterpolation(betas_win_uci, knots_window)(obstimes_window) - ConstantInterpolation(beta_win_μ, knots_window)(obstimes_window)),
         xlabel = "Time",
         ylabel = "β",
         label="Window $idx_time",
     )
-    plot!(obstimes_window,
+    StatsPlots.plot!(obstimes_window,
         betat_no_win(obstimes_window);
         color=:red,
         label="True β")
-    plot!(size = (1200,800))
+    StatsPlots.plot!(size = (1200,800))
 
     savefig(string(outdir,"β_nuts_window","$idx_time","_$seed_idx","_95.png"))
+
+    # logjoint(model_window, list_chains[idx_time-1])
+    logjoint(model_window, list_chains[idx_time])
 
     # Plot infections
     local confint = generate_confint_infec_init(list_chains[idx_time], model_window)
 
-    plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
-    plot!(I_dat[:,1:curr_t]', linewidth = 2, color = :red)
-    plot!(size = (1200,800))
+    StatsPlots.plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
+    StatsPlots.plot!(I_dat[:,1:curr_t]', linewidth = 2, color = :red)
+    StatsPlots.plot!(size = (1200,800))
 
     # Save the plot
     savefig(string(outdir,"infections_nuts_window","$idx_time","_$seed_idx","_95.png"))
@@ -810,9 +872,9 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     # Plot recoveries
     local confint = generate_confint_recov_init(list_chains[idx_time], model_window)
 
-    plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
-    plot!(R_dat[:,1:curr_t]', linewidth = 2, color = :red)
-    plot!(size = (1200,800))
+    StatsPlots.plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
+    StatsPlots.plot!(R_dat[:,1:curr_t]', linewidth = 2, color = :red)
+    StatsPlots.plot!(size = (1200,800))
 
     # Save the plot 
     savefig(string(outdir,"recoveries_nuts_window","$idx_time","_$seed_idx","_95.png"))
@@ -823,10 +885,10 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     local plot_obj_vec = Vector{Plots.Plot}(undef, NA)
 
     for i in eachindex(plot_obj_vec)
-        plot_part = scatter(1:curr_t, confint.medci_hosps[i,:], yerr = (confint.medci_hosps[i,:] .- confint.lowci_hosps[i,:], confint.uppci_hosps[i,:] .- confint.medci_hosps[i,:]), legend = false)
-        plot_obj_vec[i] = scatter!(plot_part,1:curr_t, Y[i,1:curr_t], color = :red, legend = false)
+        plot_part = StatsPlots.scatter(1:curr_t, confint.medci_hosps[i,:], yerr = (confint.medci_hosps[i,:] .- confint.lowci_hosps[i,:], confint.uppci_hosps[i,:] .- confint.medci_hosps[i,:]), legend = false)
+        plot_obj_vec[i] = StatsPlots.scatter!(plot_part,1:curr_t, Y[i,1:curr_t], color = :red, legend = false)
     end
-    plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
+    StatsPlots.plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
 
     # Save the plot
     savefig(string(outdir,"hospitalisations_nuts_window","$idx_time","_$seed_idx","_95.png"))
@@ -839,17 +901,18 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     local obs_exp_window[.!sus_pop_mask_window] .= NaN
 
     for i in eachindex(plot_obj_vec)
-        plot_part = scatter(1:curr_t, confint.medci_sero[i,:], yerr = (confint.medci_sero[i,:] .- confint.lowci_sero[i,:], confint.uppci_sero[i,:] .- confint.medci_sero[i,:]), legend = false)
-        plot_obj_vec[i] = scatter!(plot_part, 1:curr_t, obs_exp_window[i,:], color = :red, legend = false)
+        plot_part = StatsPlots.scatter(1:curr_t, confint.medci_sero[i,:], yerr = (confint.medci_sero[i,:] .- confint.lowci_sero[i,:], confint.uppci_sero[i,:] .- confint.medci_sero[i,:]), legend = false)
+        plot_obj_vec[i] = StatsPlots.scatter!(plot_part, 1:curr_t, obs_exp_window[i,:], color = :red, legend = false)
     end
-    plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
+    StatsPlots.plot(plot_obj_vec..., layout = (4,2), size = (1200,800))
 
     # Save the plot
     savefig(string(outdir,"serological_nuts_window","$idx_time","_$seed_idx","_95.png"))
 
     # Check logjoint
     local loglikvals = logjoint(model_window, list_chains[idx_time])
-    histogram(loglikvals; normalize = :pdf)
+    StatsPlots.histogram(loglikvals; normalize = :pdf)
+    savefig(string(outdir,"loglikvals_iter_","$idx_time","_$seed_idx.png"))
 
 
 end
@@ -862,7 +925,7 @@ beta_μ, betas_lci, betas_uci = get_beta_quantiles(list_chains[1], length(knots_
 
 # Sequentially create plots of beta estimates, overlapping previous windows
 for my_idx in 1:length(each_end_time)
-    plot(obstimes_window[1:Window_size],
+    StatsPlots.plot(obstimes_window[1:Window_size],
         ConstantInterpolation(beta_μ, knots_window)(obstimes_window[1:Window_size]),
         ribbon = (ConstantInterpolation(beta_μ, knots_window)(obstimes_window[1:Window_size]) - ConstantInterpolation(betas_lci, knots_window)(obstimes_window[1:Window_size]), ConstantInterpolation(betas_uci, knots_window)(obstimes_window[1:Window_size]) - ConstantInterpolation(beta_μ, knots_window)(obstimes_window[1:Window_size])),
         xlabel = "Time",
@@ -887,7 +950,7 @@ for my_idx in 1:length(each_end_time)
             knots_plot = collect(0:Δ_βt:each_end_time[idx_time])
             knots_plot = knots_plot[end] != each_end_time[idx_time] ? vcat(knots_plot, each_end_time[idx_time]) : knots_plot
             beta_win_μ, betas_win_lci, betas_win_uci = get_beta_quantiles(list_chains[idx_time], length(knots_plot))
-            plot!(obstimes[1:each_end_time[idx_time]],
+            StatsPlots.plot!(obstimes[1:each_end_time[idx_time]],
                 ConstantInterpolation(beta_win_μ, knots_plot)(obstimes[1:each_end_time[idx_time]]),
                 ribbon = (ConstantInterpolation(beta_win_μ, knots_plot)(obstimes[1:each_end_time[idx_time]]) - ConstantInterpolation(betas_win_lci, knots_plot)(obstimes[1:each_end_time[idx_time]]), ConstantInterpolation(betas_win_uci, knots_plot)(obstimes[1:each_end_time[idx_time]]) - ConstantInterpolation(beta_win_μ, knots_plot)(obstimes[1:each_end_time[idx_time]])),
                 # ylabel = "β",
@@ -896,16 +959,19 @@ for my_idx in 1:length(each_end_time)
                 )
         end
     end 
-    plot!(obstimes,
+    StatsPlots.plot!(obstimes,
         betat_no_win(obstimes),
         color=:red,
         label="True β", lw = 2)
-    plot!(size = (1200,800))
-    plot!(collect(each_end_time[1:my_idx].-Window_size), seriestype="vline", color = :black, label = missing, linestyle = :dash, lw = 4)
+    StatsPlots.plot!(size = (1200,800))
+    StatsPlots.plot!(collect(each_end_time[1:my_idx].-Window_size), seriestype="vline", color = :black, label = missing, linestyle = :dash, lw = 4)
 
 
     savefig(string(outdir,"recoveries_nuts_window_combined","$my_idx","_$seed_idx","_95.png"))
 end
+
+f = pairplot(list_chains...)
+save(string(outdir,"pairplot_nuts_window_$seed_idx.png"), f)
 
 params = Dict(
     "algorithm_times" => algorithm_times,
