@@ -3,3 +3,4 @@ Results/
 *.err
 *.out
 .vscode/
+oldplots/

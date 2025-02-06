@@ -71,8 +71,10 @@ inv_σ = 3
 σ = 1/ inv_σ
 p = [γ, σ, N];
 
-I0_μ_prior_orig = log(I0[5] / N)
-I0_μ_prior = -11
+trans_unconstrained_I0 = Bijectors.Logit(1.0/N, NA_N[5] / N)
+
+I0_μ_prior_orig = trans_unconstrained_I0(100 / N)
+I0_μ_prior = -9.5
 
 # Set parameters for inference and draw betas from prior
 β₀σ = 0.15
@@ -320,6 +322,7 @@ StatsPlots.scatter(obs_exp', legend = true)
     β₀σ = β₀σ,
     βσ = βσ,
     IFR_vec = IFR_vec,
+    trans_unconstrained_I0 = trans_unconstrained_I0,
     ::Type{T_β} = Float64,
     ::Type{T_I} = Float64,
     ::Type{T_u0} = Float64,
@@ -327,10 +330,8 @@ StatsPlots.scatter(obs_exp', legend = true)
 ) where {T_β <: Real, T_I <: Real, T_u0 <: Real, T_Seir <: Real}
 
     # Set prior for initial infected
-    log_I₀  ~ truncated(Normal(I0_μ_prior, 0.2);
-     lower = log(1/N),
-      upper = 0.0)
-    I = exp(log_I₀) * N
+    logit_I₀  ~ Normal(I0_μ_prior, 0.2)
+    I = Bijectors.inverse(trans_unconstrained_I0)(logit_I₀) * N
 
     I_list = zero(Vector{T_I}(undef, NA))
     I_list[5] = I
@@ -400,7 +401,7 @@ StatsPlots.scatter(obs_exp', legend = true)
     #     end
     # end
 
-    if any(sol.retcode != :Success)
+    if any(!SciMLBase.successful_retcode(sol))
         # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
@@ -478,7 +479,8 @@ ode_prior = sample(bayes_sir_tvp(K_window,
         β₀μ,
         β₀σ,
         βσ,
-        IFR_vec
+        IFR_vec,
+        trans_unconstrained_I0,
     ) | (y = Y[:,1:length(obstimes_window)],
      z = 💉[1:length(sample_sizes_non_zero_window)]
      ), Prior(), 1, discard_initial = 0, thinning = 1);
@@ -502,7 +504,8 @@ model_window_unconditioned = bayes_sir_tvp(K_window,
     β₀μ,
     β₀σ,
     βσ,
-    IFR_vec
+    IFR_vec,
+    trans_unconstrained_I0
     ) 
 
 model_window = model_window_unconditioned| (y = Y[:,1:length(obstimes_window)],
@@ -531,7 +534,7 @@ name_map_correct_order = ode_prior.name_map.parameters
 # Perform the chosen inference algorithm
 t1_init = time_ns()
 ode_nuts = sample(model_window
-     , Turing.NUTS(2000, 0.65;), MCMCThreads(), 1, n_chains, discard_initial = discard_init, thinning = 1);
+     , Turing.NUTS(2000, 0.65;), MCMCThreads(), discard_init, n_chains, discard_initial = 0, thinning = 1);
 t2_init = time_ns()
 runtime_init = convert(Int64, t2_init-t1_init)
 
@@ -555,7 +558,7 @@ loglikvals = logjoint(model_window, ode_nuts)
 # loglikvalstest = logjoint(model_window, ode_test)
 # loglikvalstest2 = logjoint(model_window, ode_test_2)
 StatsPlots.histogram(loglikvals; normalize = :pdf)
-StatsPlots.density!(loglikvals)
+StatsPlots.density!(loglikvals')
 
 # plot(ode_nuts[450:end,:,:])
 
@@ -574,6 +577,7 @@ using PairPlots
 # pairplot(listochains[2:end]...)
 # pairplot(ode_nuts[250:end,:,2:end], ode_test[250:end,:,:])
 
+# StatsPlots.plot(ode_nuts[250:end,:,1:end]; legend = false)
 
 # Create a function to take in the chains and evaluate the number of infections and summarise them (at a specific confidence level)
 
@@ -751,7 +755,7 @@ list_chains[1] = ode_nuts[end,:,:]
 # Define function to determine the names of the parameters in the model for some number of betas
 get_params_varnames_fix = function(n_old_betas)
     params_return = Vector{Turing.VarName}()
-    if(n_old_betas >= 0) append!(params_return,[@varname(log_I₀)]) end
+    if(n_old_betas >= 0) append!(params_return,[@varname(logit_I₀)]) end
     if(n_old_betas >= 1) append!(params_return, [@varname(log_β₀)]) end
     if(n_old_betas >= 2)
         append!(params_return, [@varname(log_β[beta_idx]) for beta_idx ∈ 1:(n_old_betas - 1)])
@@ -762,7 +766,7 @@ end
 
 get_params_varnames_all = function(n_old_betas)
     params_return = Vector{Turing.VarName}()
-    if(n_old_betas >= 0) append!(params_return,[@varname(log_I₀), @varname(η)]) end
+    if(n_old_betas >= 0) append!(params_return,[@varname(logit_I₀), @varname(η)]) end
     if(n_old_betas >= 1) append!(params_return, [@varname(log_β₀)]) end
     if(n_old_betas >= 2)
         append!(params_return, [@varname(log_β[beta_idx]) for beta_idx ∈ 1:(n_old_betas - 1)])
@@ -816,6 +820,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
         β₀σ,
         βσ,
         IFR_vec,
+        trans_unconstrained_I0
     )
 
     local model_window = model_window_unconditioned| (y = y_data_window,
@@ -824,7 +829,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
 
     t1 = time_ns()
     list_chains[idx_time] = sample(
-        model_window,
+        model_window,  
         PracticalFiltering.PracticalFilter(
             fixed_param_names,
             window_param_names,
@@ -911,7 +916,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
 
     # Check logjoint
     local loglikvals = logjoint(model_window, list_chains[idx_time])
-    StatsPlots.histogram(loglikvals; normalize = :pdf)
+    StatsPlots.histogram(loglikvals'; normalize = :pdf)
     savefig(string(outdir,"loglikvals_iter_","$idx_time","_$seed_idx.png"))
 
 

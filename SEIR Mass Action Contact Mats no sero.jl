@@ -319,7 +319,7 @@ plot(obs_exp', legend = true)
 ) where {T <: Real, T2 <: Real, T3 <: Real}
 
     # Set prior for initial infected
-    log_I₀  ~ Normal(I0_μ_prior, 0.2)
+    log_I₀  ~ truncated(Normal(I0_μ_prior, 0.2); lower = log(1.0 / N), upper = 0.0)
     I = exp(log_I₀) * N
 
     if(I < 1)
