@@ -339,7 +339,7 @@ StatsPlots.scatter(obs_exp', legend = true)
     u0[1,:] = NA_N - I_list
     u0[3,:] = I_list
 
-    η ~ Gamma(1,0.2)
+    η ~ truncated(Gamma(1,0.2), upper = maximum(N))
 
     # Set priors for betas
     ## Note how we clone the endpoint of βt
@@ -364,7 +364,7 @@ StatsPlots.scatter(obs_exp', legend = true)
         # end
     end
 
-    if(any(β .>  1 / maximum(C * 0.22 / N)) | any(isnan.(β)))
+    if(any(β .>  1 / maximum(C * 0.22 / N)) | isnan(η) | any(isnan.(β)))
         # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
@@ -916,7 +916,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
 
     # Check logjoint
     local loglikvals = logjoint(model_window, list_chains[idx_time])
-    StatsPlots.histogram(loglikvals'; normalize = :pdf)
+    StatsPlots.histogram(loglikvals; normalize = :pdf)
     savefig(string(outdir,"loglikvals_iter_","$idx_time","_$seed_idx.png"))
 
 
