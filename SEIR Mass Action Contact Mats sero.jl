@@ -16,7 +16,7 @@ using Plots.PlotMeasures
 using PracticalFiltering
 using DelimitedFiles
 
-@assert length(ARGS) == 7
+@assert length(ARGS) == 8
 
 # Read parameters from command line for the varied submission scripts
 # seed_idx = parse(Int, ARGS[1])
@@ -32,7 +32,8 @@ Window_size = parse(Int, ARGS[3])
 Data_update_window = parse(Int, ARGS[4])
 n_chains = parse(Int, ARGS[5])
 discard_init = parse(Int, ARGS[6])
-tmax = parse(Float64, ARGS[7])
+n_warmup_samples = parse(Int, ARGS[7])
+tmax = parse(Float64, ARGS[8])
 
 tmax_int = Integer(tmax)
 
@@ -45,8 +46,8 @@ Random.seed!(seeds_list[seed_idx])
 n_threads = Threads.nthreads()
 
 # Set and Create locations to save the plots and Chains
-outdir = string("Results/SEIR_MASS_ACTION_SERO/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
-tmpstore = string("Chains/SEIR_MASS_ACTION_SERO/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+outdir = string("Results/SEIR_MASS_ACTION_SERO_AMGS/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+tmpstore = string("Chains/SEIR_MASS_ACTION_SERO_AMGS/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
 
 if !isdir(outdir)
     mkpath(outdir)
@@ -357,19 +358,19 @@ StatsPlots.scatter(obs_exp', legend = true)
     end
     β[K] = β[K-1]
 
-    if(I < 1)
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
+    # if(I < 1)
+    #     # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+    #         @DynamicPPL.addlogprob! -Inf
+    #         return
+    #     # end
+    # end
 
-    if(any(β .>  1 / maximum(C * 0.22 / N)) | isnan(η) | any(isnan.(β)))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
+    # if(any(β .>  1 / maximum(C * 0.22 / N)) | isnan(η) | any(isnan.(β)))
+    #     # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+    #         @DynamicPPL.addlogprob! -Inf
+    #         return
+    #     # end
+    # end
 
     params_test = idd_params(p, ConstantInterpolation(β, knots), 1, C) 
     # Run model
@@ -401,23 +402,23 @@ StatsPlots.scatter(obs_exp', legend = true)
     #     end
     # end
 
-    if any(!SciMLBase.successful_retcode(sol))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
+    # if any(!SciMLBase.successful_retcode(sol))
+    #     # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+    #         @DynamicPPL.addlogprob! -Inf
+    #         return
+    #     # end
+    # end
     
     ## Calculate new infections per day, X
     sol_X = stack(sol.u)[5,:,:] |>
         rowadjdiff
     # println(sol_X)
-    if (any(sol_X .< -(1e-3)) | any(stack(sol.u)[3,:,:] .< -1e-3))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
+    # if (any(sol_X .< -(1e-3)) | any(stack(sol.u)[3,:,:] .< -1e-3))
+    #     # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+    #         @DynamicPPL.addlogprob! -Inf
+    #         return
+    #     # end
+    # end
     # check = minimum(sol_X)
     # println(check)
     y_μ = (conv_mat * (IFR_vec .* sol_X)') |>
@@ -425,12 +426,12 @@ StatsPlots.scatter(obs_exp', legend = true)
 
     # Assume Poisson distributed counts
     ## Calculate number of timepoints
-    if (any(isnan.(y_μ)))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
+    # if (any(isnan.(y_μ)))
+    #     # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
+    #         @DynamicPPL.addlogprob! -Inf
+    #         return
+    #     # end
+    # end
     # y = Array{T_y}(undef, NA, length(obstimes))
     y ~ product_distribution(@. NegativeBinomial3(y_μ + 1e-3, η))
 
@@ -531,10 +532,17 @@ model_window = model_window_unconditioned| (y = Y[:,1:length(obstimes_window)],
 
 name_map_correct_order = ode_prior.name_map.parameters
 
+# using Mooncake
+using AMGS
+my_amgs = Turing.Sampler(AMGS_Sampler(0.234, 0.6))
 # Perform the chosen inference algorithm
 t1_init = time_ns()
-ode_nuts = sample(model_window
-     , Turing.NUTS(2000, 0.65;), MCMCThreads(), discard_init, n_chains, discard_initial = 0, thinning = 1);
+# ode_nuts = sample(model_window
+    #  , Turing.NUTS(2000, 0.65; adtype = AutoForwardDiff()), MCMCThreads(), discard_init, n_chains, discard_initial = 0, thinning = 1);
+
+ode_amgs = sample(model_window
+     , my_amgs, MCMCThreads(), 1, n_chains, num_warmup = n_warmup_samples, discard_initial = discard_init, thinning = 1);
+
 t2_init = time_ns()
 runtime_init = convert(Int64, t2_init-t1_init)
 
@@ -554,11 +562,11 @@ using JLD2
 
 # ode_nuts = ode_test
 # Plots to aid in diagnosing issues with convergence
-loglikvals = logjoint(model_window, ode_nuts)
+loglikvals = logjoint(model_window, ode_amgs)[:,:]
 # loglikvalstest = logjoint(model_window, ode_test)
 # loglikvalstest2 = logjoint(model_window, ode_test_2)
-StatsPlots.histogram(loglikvals; normalize = :pdf)
-StatsPlots.density!(loglikvals')
+# StatsPlots.histogram(loglikvals; normalize = :pdf, bins = 10, alpha = 0.4)
+# StatsPlots.density!(loglikvals', bandwitdh = 10)
 
 # plot(ode_nuts[450:end,:,:])
 
@@ -623,7 +631,7 @@ get_beta_quantiles = function(chn, K; ci = 0.95)
         return (beta_μ, betas_lci, betas_uci)
 end
 
-beta_μ, betas_lci, betas_uci = get_beta_quantiles(ode_nuts[end,:,:], K_window)
+beta_μ, betas_lci, betas_uci = get_beta_quantiles(ode_amgs[end,:,:], K_window)
 
 betat_no_win = ConstantInterpolation(true_beta, knots)
 
@@ -656,7 +664,7 @@ savefig(string(outdir,"nuts_betas_window_1_$seed_idx.png"))
 
 
 # Plot the infecteds
-confint = generate_confint_infec_init(ode_nuts[end,:,:], model_window)
+confint = generate_confint_infec_init(ode_amgs[end,:,:], model_window)
 StatsPlots.plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf') , legend = false)
 StatsPlots.plot!(I_dat[:,1:Window_size]', linewidth = 2, color = :red)
 StatsPlots.plot!(size = (1200,800))
@@ -664,7 +672,7 @@ StatsPlots.plot!(size = (1200,800))
 savefig(string(outdir,"infections_nuts_window_1_$seed_idx.png"))
 
 # Plot the recovereds
-confint = generate_confint_recov_init(ode_nuts[end,:,:],model_window)
+confint = generate_confint_recov_init(ode_amgs[end,:,:],model_window)
 StatsPlots.plot(confint.medci_inf', ribbon = (confint.medci_inf' - confint.lowci_inf', confint.uppci_inf' - confint.medci_inf')  , legend = false)
 StatsPlots.plot!(R_dat[:,1:Window_size]', linewidth = 2, color = :red)
 StatsPlots.plot!(size = (1200,800))
@@ -685,7 +693,7 @@ function generate_confint_hosps_init(chn, model; cri = 0.95)
 end
 
 # Plot the hospitalisations
-confint = generate_confint_hosps_init(ode_nuts[end,:,:], model_window_unconditioned)
+confint = generate_confint_hosps_init(ode_amgs[end,:,:], model_window_unconditioned)
 
 plot_obj_vec = Vector{Plots.Plot}(undef, NA)
 for i in eachindex(plot_obj_vec)
@@ -709,7 +717,7 @@ function generate_confint_sero_init(chn, model, bitmatrix_nonzero, denoms; cri =
             return res
         end,
     chnm_res)[1:end])
-    display(sero)
+    # display(sero)
     lowci_sero = mapslices(x -> quantile(x,(1-cri) / 2), sero, dims = 3)[:,:,1]
     medci_sero = mapslices(x -> quantile(x, 0.5), sero, dims = 3)[:,:,1]
     uppci_sero = mapslices(x -> quantile(x, cri + (1-cri) / 2), sero, dims = 3)[:,:,1]
@@ -722,7 +730,7 @@ end
 
 
 plot_obj_vec = Vector{Plots.Plot}(undef, NA)
-confint = generate_confint_sero_init(ode_nuts[end,:,:], model_window_unconditioned, sus_pop_mask_window, sample_sizes_non_zero_window)
+confint = generate_confint_sero_init(ode_amgs[end,:,:], model_window_unconditioned, sus_pop_mask_window, sample_sizes_non_zero_window)
 obs_exp_window = obs_exp[:,1:Window_size]
 obs_exp_window[.!sus_pop_mask_window] .= NaN
 # plot the Serological data
@@ -737,7 +745,7 @@ savefig(string(outdir,"sero_nuts_window_1_$seed_idx.png"))
 
 
 # Convert the samples to an array
-ode_nuts_arr = Array(ode_nuts[end,:,:])
+ode_nuts_arr = Array(ode_amgs[end,:,:])
 
 # Create an array to store the window ends to know when to run the model
 each_end_time = collect(Window_size:Data_update_window:tmax)
@@ -750,7 +758,7 @@ algorithm_times[1] = runtime_init * 60
 
 # Construct store for the resulting chains
 list_chains = Vector{Chains}(undef, length(each_end_time))
-list_chains[1] = ode_nuts[end,:,:]
+list_chains[1] = ode_amgs[end,:,:]
 
 # Define function to determine the names of the parameters in the model for some number of betas
 get_params_varnames_fix = function(n_old_betas)
@@ -828,17 +836,30 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     )
 
     t1 = time_ns()
+    # list_chains[idx_time] = sample(
+    #     model_window,  
+    #     PracticalFiltering.PracticalFilter(
+    #         fixed_param_names,
+    #         window_param_names,
+    #         list_chains[idx_time - 1],
+    #         NUTS(2000,0.65)
+    #     ),
+    #     MCMCThreads(),
+    #     n_chains;
+    #     discard_initial = discard_init
+    # )
     list_chains[idx_time] = sample(
-        model_window,  
+        model_window,
         PracticalFiltering.PracticalFilter(
             fixed_param_names,
             window_param_names,
             list_chains[idx_time - 1],
-            NUTS(2000,0.65)
+            my_amgs
         ),
         MCMCThreads(),
         n_chains;
-        discard_initial = discard_init
+        discard_init = discard_init,
+        num_warmup = n_warmup_samples
     )
     t2 = time_ns()
     algorithm_times[idx_time] = convert(Int64, t2 - t1)
@@ -977,6 +998,7 @@ end
 
 f = pairplot(list_chains...)
 save(string(outdir,"pairplot_nuts_window_$seed_idx.png"), f)
+
 
 # Save the chains   
 JLD2.jldsave(string(outdir, "chains.jld2"), chains = list_chains)
