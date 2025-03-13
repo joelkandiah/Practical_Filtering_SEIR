@@ -2,7 +2,7 @@
 
 julia_version = "1.11.3"
 manifest_format = "2.0"
-project_hash = "6b6c7ba3d97dea951d30b45dfa2b9a3c0a4982e6"
+project_hash = "61208a69bfe13d3ef5bf529aa0d628e75ffc9e92"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "fb97701c117c8162e84dfcf80215caa904aef44f"
@@ -16,7 +16,7 @@ weakdeps = ["ChainRulesCore", "ConstructionBase", "EnzymeCore"]
     ADTypesEnzymeCoreExt = "EnzymeCore"
 
 [[deps.AMGS]]
-deps = ["AbstractMCMC", "Accessors", "AdvancedMH", "BangBang", "Distributions", "DynamicPPL", "LinearAlgebra", "MCMCChains", "OrderedCollections", "Random", "Turing"]
+deps = ["AbstractMCMC", "Accessors", "AdvancedMH", "BangBang", "DataStructures", "Distributions", "DynamicPPL", "LinearAlgebra", "MCMCChains", "OrderedCollections", "Random", "Turing"]
 path = "/home/joelk/.julia/dev/AMGS"
 uuid = "1edcbc99-e7fa-4256-82bb-db666f1f5487"
 version = "0.1.0"
@@ -3453,9 +3453,11 @@ version = "1.4.0"
 
 [[deps.Turing]]
 deps = ["ADTypes", "AbstractMCMC", "Accessors", "AdvancedHMC", "AdvancedMH", "AdvancedPS", "AdvancedVI", "BangBang", "Bijectors", "Compat", "DataStructures", "Distributions", "DistributionsAD", "DocStringExtensions", "DynamicPPL", "EllipticalSliceSampling", "ForwardDiff", "Libtask", "LinearAlgebra", "LogDensityProblems", "LogDensityProblemsAD", "MCMCChains", "NamedArrays", "Optimization", "OptimizationOptimJL", "OrderedCollections", "Printf", "Random", "Reexport", "SciMLBase", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "5218eb833eaaffa0021de7a550564ff6bd53b96c"
+git-tree-sha1 = "98dbdcd18d403582fefc32c322f41f6ef1fb713c"
+repo-rev = "mhauru/gibbs_warmup"
+repo-url = "https://github.com/joelkandiah/Turing.jl/"
 uuid = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
-version = "0.36.2"
+version = "0.36.3"
 
     [deps.Turing.extensions]
     TuringDynamicHMCExt = "DynamicHMC"
