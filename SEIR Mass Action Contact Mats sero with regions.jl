@@ -19,13 +19,6 @@ using DelimitedFiles
 @assert length(ARGS) == 8
 
 # Read parameters from command line for the varied submission scripts
-# seed_idx = parse(Int, ARGS[1])
-# Δ_βt = parse(Int, ARGS[2])
-# Window_size = parse(Int, ARGS[3])
-# Data_update_window = parse(Int, ARGS[4])
-# n_chains = parse(Int, ARGS[5])
-# discard_init = parse(Int, ARGS[6])
-# tmax = parse(Float64, ARGS[7])
 seed_idx = parse(Int, ARGS[1])
 Δ_βt = parse(Int, ARGS[2])
 Window_size = parse(Int, ARGS[3])
@@ -57,7 +50,6 @@ end
 # Initialise the model parameters (fixed)
 tspan = (0.0, tmax)
 obstimes = 1.0:1.0:tmax
-# NA_N= [74103.0, 318183.0, 804260.0, 704025.0, 1634429.0, 1697206.0, 683583.0, 577399.0]
 NA_N = Matrix(transpose([74103.0 318183.0 804260.0 704025.0 1634429.0 1697206.0 683583.0 577399.0;
           122401.0 493480.0 1123981.0 1028009.0 3063113.0 2017884.0 575433.0 483780.0;
           118454.0 505611.0 1284743.0 1308343.0 2631847.0 2708355.0 1085138.0 895188.0;
@@ -83,8 +75,6 @@ inv_σ = 3
 σ = 1/ inv_σ
 p = [γ, σ ];
 
-# I0_μ_prior_orig = I0[5,:] ./ N_pop_R .|> trans_unconstrained_I0
-
 
 # Set parameters for inference and draw betas from prior
 β₀σ = 0.15
@@ -102,51 +92,61 @@ K = length(knots)
 
 C = readdlm("ContactMats/england_8ag_contact_ldwk1_20221116_stable_household.txt")
 
+using Tullio
+
 # Construct an ODE for the SEIR model
 function sir_tvp_ode!(du::Array{T1}, u::Array{T2}, p_, t) where {T1 <: Real, T2 <: Real}
     # Grab values needed for calculation
-    @inbounds begin
-        S = @view u[1,:,:]
-        E = @view u[2,:,:]
-        I = @view u[3,:,:]
+    @inbounds @views begin
+        S = u[1,:,:]
+        E = u[2,:,:]
+        I = u[3,:,:]
     end
     (γ, σ) = p_.params_floats
+
+    (infection, infectious, recovery) = p_.cache_SIRderivs
+    (βt, b) = p_.cache_beta
     
     # Calculate the force of infection
-    βt = t .|> p_.β_functions
-    b = βt .* (@view sum(p_.C * I * 0.22 ./ transpose(p_.NR_pops), dims = 1)[1,:])
+    map!(x-> x(t), βt, p_.β_functions)
+    # βt = map((f) -> f(t), p_.β_functions)
+    @tullio grad = false threads = false b[j] = p_.C[i,k] * I[k,j] * 0.22 / p_.NR_pops[j] |> (_) * βt[j]
 
-    infection = (S .* b')
-    infectious = σ .* E
-    recovery = γ .* I
+    infection .= (S .* transpose(b))
+    infectious .= σ .* E
+    recovery .= γ .* I
     @inbounds begin
-        du[1,:,:] = - infection
-        du[2,:,:] = infection - infectious
-        du[3,:,:] = infectious - recovery
-        du[4,:,:] = infection
-        du[5,:,:] = infectious
+        du[1,:,:] .= .- infection
+        du[2,:,:] .= infection .- infectious
+        du[3,:,:] .= infectious .- recovery
+        du[4,:,:] .= infection
+        du[5,:,:] .= infectious
     end
 end;
 
-
-
-struct idd_params{T <: Real, T2 <: Real, T3 <: DataInterpolations.AbstractInterpolation, T4 <: Real}
+struct idd_params{T <: Real, T2 <: Real, T3 <: DataInterpolations.AbstractInterpolation, T4 <: Real, T5 <: Real, T6 <: Real}
     params_floats::Vector{T}
     NR_pops::Vector{T2}
     β_functions::Vector{T3}
     C::Matrix{T4}
+    cache_SIRderivs::Vector{Matrix{T5}}
+    cache_beta::Vector{Vector{T6}}
 end
 
+my_infection = zeros(NA, NR)
+my_infectious = zeros(NA, NR)
+my_recovery = zeros(NA, NR)
+my_βt = zeros(NR)
+my_b = zeros(NR)
 
-params_test = idd_params(p, N_pop_R, map(x -> ConstantInterpolation(x, knots), eachcol(true_beta)), C)
+params_test = idd_params(p, N_pop_R, map(x -> ConstantInterpolation(x, knots), eachcol(true_beta)), C, [my_infection, my_infectious, my_recovery], [my_βt, my_b])
 
 # Initialise the specific values for the ODE system and solve
-prob_ode = ODEProblem(sir_tvp_ode!, u0, tspan, params_test);
+prob_ode = ODEProblem{true}(sir_tvp_ode!, u0, tspan, params_test);
 #? Note the choice of tstops and d_discontinuities to note the changepoints in β
 #? Also note the choice of solver to resolve issues with the "stiffness" of the ODE system
 sol_ode = solve(prob_ode,
-            AutoTsit5(Rosenbrock32()),
-            # callback = cb,
+            Tsit5(),
             saveat = obstimes,
             tstops = knots,
             d_discontinuities = knots,
@@ -162,10 +162,8 @@ for i in 1:NR
         legend = false)
 end
 StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
-# savefig(string("SEIR_system_wth_CM2_older_infec_$seed_idx.png"))
 
 # Find the cumulative number of cases
-
 I_dat = Array(sol_ode(obstimes))[3,:,:,:]
 R_dat = Array(sol_ode(obstimes))[4,:,:,:]
 I_tot_2 = Array(sol_ode(obstimes))[5,:,:,:]
@@ -189,11 +187,7 @@ function adjdiff(ary)
     return ary1
 end
 
-
-
 # Number of new infections
-# X = adjdiff(I_tot)
-# X = rowadjdiff(I_tot)
 X = rowadjdiff3d(I_tot_2)
 
 # Define Gamma distribution by mean and standard deviation
@@ -242,11 +236,9 @@ end
 
 IFR_vec = [0.0000078, 0.0000078, 0.000017, 0.000038, 0.00028, 0.0041, 0.025, 0.12]
 
-# (conv_mat * (IFR_vec .* X)')' ≈ mapreduce(x -> conv_mat * x, hcat, eachrow( IFR_vec .* X))'
 # Evaluate mean number of hospitalisations (using proportion of 0.3)
 conv_mat = construct_pmatrix(;)  
-Y_mu = mapslices(x->(conv_mat * (IFR_vec .* x)')', X, dims = (1,3))
-
+Y_mu = stack(transpose(map(x -> conv_mat * transpose(x), eachslice(IFR_vec .* X, dims = 2)))[:,:,1], dims = 2)
 
 # Create function to construct Negative binomial with properties matching those in Birrell et. al (2021)
 function NegativeBinomial3(μ, ϕ)
@@ -268,7 +260,6 @@ for i in 1:NR
 end
 StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
 
-# savefig(string(outdir,"hospitalisations_$seed_idx.png"))
 
 # Store ODE system parameters in a dictionary and write to a file
 params = Dict(
@@ -292,9 +283,6 @@ params = Dict(
     "Gamma theta" => inf_to_hosp.θ
 )
 
-# open(string(outdir, "params.toml"), "w") do io
-#         TOML.print(io, params)
-# end
 
 # Define Seroprevalence estimates
 sero_sens = 0.7659149
@@ -328,7 +316,6 @@ obs_exp[sus_pop_mask] = 💉 ./ sample_sizes_non_zero
 a = Vector{Plots.Plot}(undef, NR)
 for i in 1:NR
     a[i] = StatsPlots.scatter(1:length(obstimes), obs_exp[:,i,:]', legend = false, alpha = 0.3)
-    # a[i] = plot!(a[i],obstimes, eachrow(sus_pop[:,i,:]))
 end
 StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
 
@@ -357,16 +344,14 @@ StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
     βσ = βσ,
     IFR_vec = IFR_vec,
     trans_unconstrained_I0 = trans_unconstrained_I0,
+    prob_ode = prob_ode,
     ::Type{T_β} = Float64,
     ::Type{T_I} = Float64,
     ::Type{T_u0} = Float64,
     ::Type{T_Seir} = Float64;
+
 ) where {T_β <: Real, T_I <: Real, T_u0 <: Real, T_Seir <: Real}
 
-    # Set prior for initial infected
-    # println(I0_μ_prior)
-    # println(N_regions)
-    # logit_I₀  ~ filldist(Normal(I0_μ_prior, 0.2), N_regions)
     logit_I₀_vec = Vector{T_I}(undef, N_regions)
 
     logit_I₀_EE ~ Normal(I0_μ_prior, 0.2)
@@ -388,20 +373,19 @@ StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
     # I = Vector{T_I}(undef, N_regions)
     I = (logit_I₀_vec) .|> Bijectors.Inverse.(trans_unconstrained_I0) |> (x -> x .* N)
 
-
-    
     I_list = zero(Matrix{T_I}(undef, NA, N_regions))
-    I_list[5,:] = I
+    I_list[5,:] .= I
     u0 = zero(Array{T_u0}(undef, 5, NA, N_regions))
-    u0[1,:,:] = NA_N - I_list
-    u0[3,:,:] = I_list
+    u0[1,:,:] .= NA_N .- I_list
+    u0[3,:,:] .= I_list
 
     η ~ truncated(Gamma(1,0.2), upper = minimum(N))
-    
+
     # Set priors for betas
     ## Note how we clone the endpoint of βt
     β = Matrix{T_β}(undef, K, N_regions)
     # log_β = Vector{Vector{T_β}}(undef, N_regions)
+    # truncate???
     log_β₀_EE ~ Normal(β₀μ, β₀σ)
     log_β₀_LDN ~ Normal(β₀μ, β₀σ)
     log_β₀_MID ~ Normal(β₀μ, β₀σ)
@@ -419,15 +403,8 @@ StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
     log_β_SE = Vector{T_β}(undef, K-2) 
     log_β_SW = Vector{T_β}(undef, K-2) 
 
-    # for i in 1:NR
-    #     log_β[i] = Vector{T_β}(undef, K-2)
-    # end
     p = [γ, σ]
-    # log_β₀ = Vector{T_β}(undef, N_regions)
-    # for i in 1:NR
-    #     log_β₀[i] ~ Normal(β₀μ, β₀σ)
-    # end
-    # βₜ σ ~ Gamma(0.1,100)
+
     βₜσ = βσ
     β[1,1] = exp(log_β₀_EE)
     β[1,2] = exp(log_β₀_LDN)
@@ -440,140 +417,77 @@ StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
     # for i in 1:N_regions
         for j in 2:K-1
             log_β_EE[j-1] ~ Normal(0.0, βₜσ)
-            β[j,1] = exp.(log.(β[j-1,1]) .+ log_β_EE[j-1])
+            β[j,1] = exp(log(β[j-1,1]) + log_β_EE[j-1])
 
             log_β_LDN[j-1] ~ Normal(0.0, βₜσ)
-            β[j,2] = exp.(log.(β[j-1,2]) .+ log_β_LDN[j-1])
+            β[j,2] = exp(log(β[j-1,2]) + log_β_LDN[j-1])
 
             log_β_MID[j-1] ~ Normal(0.0, βₜσ)
-            β[j,3] = exp.(log.(β[j-1,3]) .+ log_β_MID[j-1])
+            β[j,3] = exp(log(β[j-1,3]) + log_β_MID[j-1])
 
             log_β_NEY[j-1] ~ Normal(0.0, βₜσ)
-            β[j,4] = exp.(log.(β[j-1,4]) .+ log_β_NEY[j-1])
+            β[j,4] = exp(log(β[j-1,4]) + log_β_NEY[j-1])
 
             log_β_NW[j-1] ~ Normal(0.0, βₜσ)
-            β[j,5] = exp.(log.(β[j-1,5]) .+ log_β_NW[j-1])
+            β[j,5] = exp(log(β[j-1,5]) + log_β_NW[j-1])
 
             log_β_SE[j-1] ~ Normal(0.0, βₜσ)
-            β[j,6] = exp.(log.(β[j-1,6]) .+ log_β_SE[j-1])
+            β[j,6] = exp(log(β[j-1,6]) + log_β_SE[j-1])
 
             log_β_SW[j-1] ~ Normal(0.0, βₜσ)
-            β[j,7] = exp.(log.(β[j-1,7]) .+ log_β_SW[j-1])
+            β[j,7] = exp(log(β[j-1,7]) + log_β_SW[j-1])
 
         end
-    # end
 
-    # for i in 2:K-1
-    #     log_β[i-1,:] ~ filldist(Normal(0.0, βₜσ),N_regions)
-    #     β[i,:] = exp.(log.(β[i-1,:]) .+ log_β[i-1,:])
-    # end
-    β[K,:] .= β[K-1,:]
+    β[K,:] .= @view β[K-1,:]
 
-    if(any(I .< 1))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
 
-    if(any(β .>  1 / maximum(C .* 0.22 ./ minimum(N))) | any(isnan.(β)))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext(  )
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
-
-    # Set up the β β_functions
     β_functions = map(x -> ConstantInterpolation(x, knots), eachcol(β))
 
-    params_test = idd_params(p, N, β_functions, C) 
-    # Run model
-    ## Remake with new initial conditions and parameter values
-    tspan = (zero(eltype(obstimes)), obstimes[end])
-    prob = ODEProblem{true}(sir_tvp_ode!, u0, tspan, params_test)
+    infections = zeros(NA, N_regions)
+    infectious = zeros(NA, N_regions)
+    recovery = zeros(NA, N_regions)
+    βt = zeros(N_regions)
+    b = zeros(N_regions)
+    cache_SIRderivs = [infections, infectious, recovery]
+    cache_beta = [βt, b]
+    params_test = idd_params(p, N, β_functions, C, cache_SIRderivs, cache_beta)
 
-
-    # ext_obstimes = StepRangeLen(first(obstimes) - obstimes.step,
-                                # obstimes.step,
-                                # Int64(floor((last(obstimes) - first(obstimes) + obstimes.step) / obstimes.step)) + 1)
-    
-    # display(params_test.β_function)
+    prob = remake(prob_ode, u0 = u0, p = params_test)
     ## Solve
     sol = 
         # try
         solve(prob,
             Tsit5(),
             saveat = obstimes,
-            # maxiters = 1e7,
             d_discontinuities = knots[2:end-1],
-            tstops = knots,
-            # abstol = 1e-10,
-            # reltol = 1e-7
+            tstops = knots
             )
-    # catch e
-    #     if e isa InexactError
-    #         if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-    #             @DynamicPPL.addlogprob! -Inf
-    #             return
-    #         end
-    #     else
-    #         rethrow(e)
-    #     end
-    # end
 
     if any(!SciMLBase.successful_retcode(sol))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
             @DynamicPPL.addlogprob! -Inf
             return
-        # end
     end
     
     ## Calculate new infections per day, X
-    sol_X =  stack(sol.u)[5,:,:,:] |>
+    sol_X = stack(sol.u)[5,:,:,:] |>
         rowadjdiff3d
-    # println(sol_X)
-    if (any(sol_X .<= -(1e-3)) | any(stack(sol.u)[3,:,:,:] .<= -1e-3))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
-    # check = minimum(sol_X)
-    # println(check)
-    y_μ = Array{T_Seir}(undef, NA, N_regions, length(obstimes))
 
-    # display(y_μ)
-    # display(conv_mat)
-    # display(sol_X)
+    y_μ = stack(transpose(map(x -> conv_mat * transpose(x), eachslice(IFR_vec .* sol_X, dims = 2)))[:,:,1], dims = 2)
 
-    for i in 1:N_regions
-        y_μ[:,i,:] .= (conv_mat * (IFR_vec .* sol_X[:,i,:])') |>
-            transpose
-    end
+    # Keep this code in case of loss of type inference, but remember to initialise container
+    # for i in 1:N_regions
+    #     y_μ[:,i,:] .= (conv_mat * (IFR_vec .* sol_X[:,i,:])') |>
+    #         transpose
+    # end
 
-    # Assume Poisson distributed counts
-    ## Calculate number of timepoints
-    if (any(isnan.(y_μ)))
-        # if DynamicPPL.leafcontext(__context__) !== DynamicPPL.PriorContext()
-            @DynamicPPL.addlogprob! -Inf
-            return
-        # end
-    end
-    # y = Array{T_y}(undef, NA, length(obstimes))
-
-    # println("log_I₀ = ", log_I₀)
-    # println("log_β₀ = ", log_β₀)
-    # println("η = " , η)
-    # println("β = ", β)
-    # println("tst: ", (y_μ .+ 1e-3)[(y_μ .+ 1e-3) .== ForwardDiff.Dual{ForwardDiff.Tag{DynamicPPL.DynamicPPLTag, Float64}}(0.0,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN)])
-    
     y ~ product_distribution(NegativeBinomial3.(y_μ .+ 1e-3, η))
 
 
     # Introduce Serological data into the model (for the first region)
     sus_pop = map(x -> x[1,:,:], sol.u) |>
         stack
-    sus_pop_samps = @view (sus_pop[:,:,:] ./ NA_N)[sus_pop_mask]
+    sus_pop_samps = @view (sus_pop ./ NA_N)[sus_pop_mask]
     
     # z = Array{T_z}(undef, length(sero_sample_sizes))
     z ~ product_distribution(@. Binomial(
@@ -584,10 +498,8 @@ StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
     return (; sol, y, z)
 end;
 
-# using ForwardDiff
-
-
 # Define the parameters for the model given the known window size (i.e. vectors that fit within the window) 
+
 knots_window = collect(0:Δ_βt:Window_size)
 knots_window = knots_window[end] != Window_size ? vcat(knots_window, Window_size) : knots_window
 K_window = length(knots_window)
@@ -597,31 +509,8 @@ conv_mat_window = construct_pmatrix(inf_to_hosp_array_cdf, length(obstimes_windo
 sus_pop_mask_window = sus_pop_mask[:,:,1:length(obstimes_window)]
 sample_sizes_non_zero_window = @view sample_sizes[:,:,1:length(obstimes_window)][sus_pop_mask_window]
 
-# Sample the parameters to construct a "correct order" list of parameters
-ode_prior = sample(bayes_sir_tvp(K_window,
-        γ,
-        σ,
-        N_pop_R,
-        NA,
-        NA_N,
-        NR,
-        conv_mat_window,
-        knots_window,
-        C,
-        sample_sizes_non_zero_window,
-        sus_pop_mask_window,
-        sero_sens,
-        sero_spec,
-        obstimes_window,
-        I0_μ_prior,
-        β₀μ,
-        β₀σ,
-        βσ,
-        IFR_vec,
-        trans_unconstrained_I0
-    ) | (y = Y[:,:,1:length(obstimes_window)],
-     z = 💉[1:length(sample_sizes_non_zero_window)]
-     ), Prior(), 1, discard_initial = 0, thinning = 1);
+tspan_window = (0.0, Window_size)
+prob_ode = ODEProblem{true}(sir_tvp_ode!, u0, tspan_window, params_test);
 
 model_window_unconditioned = bayes_sir_tvp(K_window,
     γ,
@@ -643,26 +532,22 @@ model_window_unconditioned = bayes_sir_tvp(K_window,
     β₀σ,
     βσ,
     IFR_vec,
-    trans_unconstrained_I0
+    trans_unconstrained_I0,
+    prob_ode
 ) 
 
 model_window = model_window_unconditioned | (y = Y[:,:,1:length(obstimes_window)],
     z = 💉[1:length(sample_sizes_non_zero_window)]
 ) 
 
-
 # @code_warntype model_window.f(
 #     model_window,
 #     Turing.VarInfo(model_window),
-#     # Turing.SamplingContext(
-#     #     Random.default_rng(), Turing.SampleFromPrior(), Turing.DefaultContext()
-#     # ),
 #     Turing.DefaultContext(),
 #     model_window.args...
 # )
-# who is writing my completions
 
-name_map_correct_order = ode_prior.name_map.parameters
+# name_map_correct_order = ode_prior.name_map.parameters
 using AMGS
 
 myamgsEE = AMGS_Sampler(0.234, 0.6, true, 1e-5)
@@ -686,23 +571,6 @@ NW_varnames = (@varname(logit_I₀_NW), @varname(log_β₀_NW), @varname(log_β_
 SE_varnames = (@varname(logit_I₀_SE), @varname(log_β₀_SE), @varname(log_β_SE))
 SW_varnames = (@varname(logit_I₀_SW), @varname(log_β₀_SW), @varname(log_β_SW))
 
-
-# logit_varnames = @varname(logit_I₀)
-# β₀_varnames = @varname(log_β₀)
-# if (K_window > 2) log_β_varnames = (@varname(log_β[i]) for i in 1:NR) end
-
-
-# regional_varnames = (@varname(logit_I₀), @varname(log_β₀), @varname(log_β))
-
-# global_regional_gibbs_mine = GibbsLoop(global_varnames => myamgs_η,
-#     EE_varnames => myamgsEE,
-#     LDN_varnames => myamgsLDN,
-#     MID_varnames => myamgsMID,
-#     NEY_varnames => myamgsNEY,
-#     NW_varnames => myamgsNW,
-#     SE_varnames => myamgsSE,
-#     SW_varnames => myamgsSW)
-
 global_regional_gibbs_mine = Gibbs(global_varnames => myamgs_η,
     EE_varnames => myamgsEE,
     LDN_varnames => myamgsLDN,
@@ -711,41 +579,38 @@ global_regional_gibbs_mine = Gibbs(global_varnames => myamgs_η,
     NW_varnames => myamgsNW,
     SE_varnames => myamgsSE,
     SW_varnames => myamgsSW)
+
+t1_init_precomp = time_ns()
+sample(
+    model_window,
+    global_regional_gibbs_mine,
+    MCMCThreads(),
+    3,
+    n_chains,
+    num_warmup = 2,
+    thinning = 1,
+    discard_initial = 0
+);
+t2_init_precomp = time_ns()
+runtime_init_precomp = convert(Int64, t2_init_precomp-t1_init_precomp)
     
 t1_init = time_ns()
 ode_nuts = sample(
     model_window,
     global_regional_gibbs_mine,
     MCMCThreads(),
-    2000,
-    3,
-    num_warmup = 1000,
-    # num_warmup = n_warmup_samples,
-    thinning = 20,
+    1,
+    n_chains,
+    # num_warmup = 1,
+    num_warmup = n_warmup_samples,
+    # thinning = 20,
     # discard_initial = 377900,
-    # discard_initial = 380000,
-    discard_initial = 0
+    discard_initial = discard_init,
+    # discard_initial = 0
 ) 
 t2_init = time_ns()
 runtime_init = convert(Int64, t2_init-t1_init)
-#105 minutes
-
-# t1_init2 = time_ns()
-# ode_nuts2 = sample(
-#     model_window,
-#     global_regional_gibbs_non_loop,
-#     MCMCThreads(),
-#     1,
-#     n_threads,
-#     # num_warmup = 1000,
-#     num_warmup = n_warmup_samples,
-#     # thinning = 20,
-#     # discard_initial = 377900,
-#     # discard_initial = 380000,
-#     discard_initial = discard_init
-# ) 
-# t2_init2 = time_ns()
-# runtime_init2 = convert(Int64, t2_init2-t1_init2)
+#35 minutes (after ~5-10min compile) for 25000 + 4000 samples
 
 
 
@@ -770,22 +635,6 @@ res = generated_quantities(
     ode_nuts[end,:,:]
 )
 
-# a = Vector{Plots.Plot}(undef, 3 * NR)
-# for i in 1:NR
-#     a[i] = StatsPlots.plot( stack(map(x -> x[3,:,i], res[1].sol.u))',
-#         xlabel="Time",
-#         ylabel="Number",
-#         linewidth = 1,
-#         legend = false)
-#     a[i+NR] = StatsPlots.plot(obstimes_window, stack(map(x -> x[3,:,1], sol_ode.u))[:,1:Window_size]')
-#     a[i + (2* NR)] = StatsPlots.plot( stack(map(x -> x[3,:,1], sol_ode.u))[:,1:Window_size]' - stack(map(x -> x[3,:,i], res[1].sol.u))',
-#         xlabel="Time",
-#         ylabel="diff",
-#         linewidth = 1,
-#         legend = false)
-# end
-# StatsPlots.plot(a..., layout = (3,NR), size = (1800,2150))
-
 I_tot_win = Array(res[1].sol(obstimes_window))[5,:,:,:]
 X_win = rowadjdiff3d(I_tot_win)
 
@@ -798,11 +647,6 @@ for i in 1:NR
     a[i] = StatsPlots.plot(a[i],obstimes_window, eachrow(Y_mu[:,i,1:Window_size]))
 end
 StatsPlots.plot(a..., layout = (2,NR), size = (2800,1800))
-# plot(ode_nuts[450:end,:,:])
-
-# plot(loglikvals[150:end,:])
-# savefig(string("loglikvals_try_fix_I0_$seed_idx.png"))
-
 
 # Create a function to take in the chains and evaluate the number of infections and summarise them (at a specific confidence level)
 
@@ -842,7 +686,13 @@ R_dat = Array(sol_ode(obstimes))[4,:,:,:] # Population of recovereds at times
 # TODO Rewrite this function with new β names
 function get_beta_quantiles(chn, K_window; quantile = 0.95, NR = NR)
     reg_names = ["EE", "LDN", "MID", "NEY", "NW", "SE", "SW"]
-    β₀_syms = [Symbol("log_β₀_$reg_name") for reg_name in reg_names]
+    β₀_syms = [Symbol("log_β₀_EE"),
+               Symbol("log_β₀_LDN"),
+               Symbol("log_β₀_MID"),
+               Symbol("log_β₀_NEY"),
+               Symbol("log_β₀_NW"),
+               Symbol("log_β₀_SE"),
+               Symbol("log_β₀_SW")]
     β_syms = [[Symbol("log_β_$reg_name[$j]") for reg_name in reg_names] for j in 1:K_window - 2]
 
     tst_arr = Array{Float64}(undef, K_window-1, NR, n_chains)
@@ -1006,7 +856,10 @@ each_end_time = Integer.(each_end_time)
 
 # Store the runtimes of each window period
 algorithm_times = Vector{Float64}(undef, length(each_end_time))
-algorithm_times[1] = runtime_init * 60
+algorithm_times[1] = runtime_init / 1e9
+
+runtimes_precomp = Vector{Float64}(undef, length(each_end_time))
+runtimes_precomp[1] = runtime_init_precomp /1e9
 
 # Construct store for the resulting chains
 list_chains = Vector{Chains}(undef, length(each_end_time))
@@ -1115,6 +968,10 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     y_data_window = Y[:,:,1:curr_t]
     z_data_window = 💉[1:length(sample_sizes_non_zero_window)]
 
+    # Construct the ODE Problem to be used 
+    local tspan_window = (0.0, curr_t)
+    local prob_ode_window = ODEProblem{true}(sir_tvp_ode!, u0, tspan_window, params_test);
+
     local model_window_unconditioned = bayes_sir_tvp(K_window,
         γ,
         σ,
@@ -1135,7 +992,8 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
         β₀σ,
         βσ,
         IFR_vec,
-        trans_unconstrained_I0
+        trans_unconstrained_I0,
+        prob_ode_window
     )
 
     local model_window = 
@@ -1177,6 +1035,25 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
         SW_varnames => myamgsSW
     )
 
+    # Get the time to compile the Sampler
+    t1_precomp = time_ns()
+    sample(
+        model_window,
+        PracticalFiltering.PracticalFilter(
+            fixed_param_names,
+            window_param_names,
+            list_chains[idx_time - 1][end,:,:],
+            global_regional_gibbs_mine),
+        MCMCThreads(),
+        3,
+        n_chains,
+        num_warmup = 2,
+        thinning = 1,
+        discard_initial = 0
+    )
+    t2_precomp = time_ns()
+    runtimes_precomp[idx_time] = convert(Int64, t2_precomp - t1_precomp)
+
     t1 = time_ns()
     list_chains[idx_time] = sample(
         model_window,
@@ -1188,13 +1065,13 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
         ),
         MCMCThreads(),
         1,
-        # 2000,
+        # 1100,
         n_chains;
         discard_initial = discard_init,
-        # discard_initial = 1500 * 20,
+        # discard_initial = 0,
         # num_warmup = 1000,
-        num_warmup = n_warmup_samples
-        # thinning = 20
+        num_warmup = n_warmup_samples,
+        # thinning = 25
     )
     t2 = time_ns()
     algorithm_times[idx_time] = convert(Int64, t2 - t1)
@@ -1293,7 +1170,7 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
 
     # Plot serological data
     confint = generate_confint_sero_init(ode_nuts[end,:,:], model_window_unconditioned, sus_pop_mask_window, sample_sizes_non_zero_window)
-obs_exp_window = obs_exp[:,:,1:curr_t]
+    local obs_exp_window = obs_exp[:,:,1:curr_t]
     obs_exp_window[.!sus_pop_mask_window] .= NaN
     # plot the Serological data
     for i in 1:NA
@@ -1369,6 +1246,7 @@ end
 
 params = Dict(
     "algorithm_times" => algorithm_times,
+    "compilation_times" => runtimes_precomp,
     # "algorithm_times_each_sample" => algorithm_times_each_sample
     )
 
