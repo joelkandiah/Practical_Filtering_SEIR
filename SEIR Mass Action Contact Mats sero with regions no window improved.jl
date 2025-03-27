@@ -16,17 +16,21 @@ using Plots.PlotMeasures
 using PracticalFiltering
 using DelimitedFiles
 
-@assert length(ARGS) == 8
+@assert length(ARGS) == 2
 
 # Read parameters from command line for the varied submission scripts
 seed_idx = parse(Int, ARGS[1])
-Δ_βt = parse(Int, ARGS[2])
-Window_size = parse(Int, ARGS[3])
-Data_update_window = parse(Int, ARGS[4])
-n_chains = parse(Int, ARGS[5])
-discard_init = parse(Int, ARGS[6])
-n_warmup_samples = parse(Int, ARGS[7])
-tmax = parse(Float64, ARGS[8])
+opts_file = TOML.parsefile(ARGS[2])["opts"]
+
+
+# Set the parameters for the model
+Δ_βt = Int(opts_file["delta_betat"])
+Window_size = Int(opts_file["Window_size"])
+Data_update_window = Int(opts_file["Data_update_window"])
+n_chains = Int(opts_file["n_chains"])
+discard_init = Int.(opts_file["discard_init"])
+n_warmup_samples = Int(opts_file["n_warmup_samples"])
+tmax = Int(opts_file["tmax"])
 
 # List the seeds to generate a set of data scenarios (for reproducibility)
 seeds_list = [1234, 1357, 2358, 3581]
@@ -37,8 +41,8 @@ Random.seed!(seeds_list[seed_idx])
 n_threads = Threads.nthreads()
 
 # Set and Create locations to save the plots and Chains
-outdir = string("Results/10bp pop_reg/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
-tmpstore = string("Chains/10bp pop_reg/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+outdir = string("Results/reg/$Δ_βt","_beta/nowin/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+tmpstore = string("Chains/reg/$Δ_βt","_beta/nowin/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
 
 if !isdir(outdir)
     mkpath(outdir)
@@ -576,9 +580,7 @@ global_regional_gibbs_mine = Gibbs(global_varnames => myamgs_η,
     SE_varnames => myamgsSE,
     SW_varnames => myamgsSW)
 
-
 using JLD2
-
 if(isfile(string(outdir, "chains1.jld2")))
     chain_file = JLD2.load(string(outdir, "chains1.jld2"))
     ode_nuts = chain_file["chains"]
@@ -610,20 +612,17 @@ else
         num_warmup = n_warmup_samples,
         # thinning = 20,
         # discard_initial = 377900,
-        discard_initial = discard_init,
+        discard_initial = discard_init[1],
         # discard_initial = 0
     ) 
     t2_init = time_ns()
     runtime_init = convert(Int64, t2_init-t1_init)
     #35 minutes (after ~5-10min compile) for 25000 + 4000 samples
-    JLD2.jldsave(string(outdir, "chains1.jld2"), chains = ode_nuts, runtime_init_precomp = runtime_init_precomp, runtime_init = runtime_init)
+    JLD2.save(string(outdir, "chains1.jld2"), "chains", ode_nuts, "runtime_init_precomp", runtime_init_precomp, "runtime_init", runtime_init)
 end
 
 
 # Save the chains   
-JLD2.jldsave(string(outdir, "chains.jld2"), chains = ode_nuts)
-# ode_nuts = JLD2.load(string(outdir, "chains.jld2"))["chains"]
-
 # rhat_evals = map(i -> maximum(rhat((ode_nuts[i:i+199,:,:])).nt.rhat), 1:1800)
 
 # Check for first rhat < 1.05
@@ -871,91 +870,12 @@ list_chains = Vector{Chains}(undef, length(each_end_time))
 list_chains[1] = ode_nuts
 
 # Define function to determine the names of the parameters in the model for some number of betas
-get_params_varnames_fix = function(n_old_betas)
-    # reg_names = ["EE", "LDN", "MID", "NEY", "NW", "SE", "SW"]
-    params_return = Vector{Turing.VarName}()
-    if(n_old_betas >= 0) append!(params_return,
-        [
-            @varname(logit_I₀_EE),
-            @varname(logit_I₀_LDN),
-            @varname(logit_I₀_MID),
-            @varname(logit_I₀_NEY),
-            @varname(logit_I₀_NW),
-            @varname(logit_I₀_SE),
-            @varname(logit_I₀_SW),
-        ]) end
-    if(n_old_betas >= 1) append!(params_return,
-        [
-            @varname(log_β₀_EE),
-            @varname(log_β₀_LDN),
-            @varname(log_β₀_MID),
-            @varname(log_β₀_NEY),
-            @varname(log_β₀_NW),
-            @varname(log_β₀_SE),
-            @varname(log_β₀_SW),
-        ]) end
-    if(n_old_betas >= 2)
-        append!(params_return,
-       vec(stack( [[
-            @varname(log_β_EE[beta_idx]),
-            @varname(log_β_LDN[beta_idx]),
-            @varname(log_β_MID[beta_idx]),
-            @varname(log_β_NEY[beta_idx]),
-            @varname(log_β_NW[beta_idx]),
-            @varname(log_β_SE[beta_idx]),
-            @varname(log_β_SW[beta_idx]),
-        ] for beta_idx in 1:n_old_betas-1])))
-    end
-         
-    return params_return
-end
-
-get_params_varnames_all = function(n_old_betas)
-    params_return = Vector{Turing.VarName}()
-    if(n_old_betas >= 0) append!(params_return,
-        [
-            @varname(logit_I₀_EE),
-            @varname(logit_I₀_LDN),
-            @varname(logit_I₀_MID),
-            @varname(logit_I₀_NEY),
-            @varname(logit_I₀_NW),
-            @varname(logit_I₀_SE),
-            @varname(logit_I₀_SW),
-        ], [@varname(η)]) end
-    if(n_old_betas >= 1) append!(params_return,
-        [
-            @varname(log_β₀_EE),
-            @varname(log_β₀_LDN),
-            @varname(log_β₀_MID),
-            @varname(log_β₀_NEY),
-            @varname(log_β₀_NW),
-            @varname(log_β₀_SE),
-            @varname(log_β₀_SW),
-        ]) end
-        if(n_old_betas >= 2)
-            append!(params_return,
-           vec(stack( [[
-                @varname(log_β_EE[beta_idx]),
-                @varname(log_β_LDN[beta_idx]),
-                @varname(log_β_MID[beta_idx]),
-                @varname(log_β_NEY[beta_idx]),
-                @varname(log_β_NW[beta_idx]),
-                @varname(log_β_SE[beta_idx]),
-                @varname(log_β_SW[beta_idx]),
-            ] for beta_idx in 1:n_old_betas-1])))
-        end
-         
-    return params_return
-end
-
 
 for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     idx_time = idx_time_off_by_1 + 1
     
     # Determine which betas to fix and which ones to sample
     curr_t = each_end_time[idx_time]
-    n_old_betas = Int(floor((curr_t - Window_size) / Δ_βt))
-    window_betas = Int(ceil(curr_t / Δ_βt) - n_old_betas)
 
     # Set the values for the current window: knots, K, convolution matrix...
     local knots_window = collect(0:Δ_βt:curr_t)
@@ -967,8 +887,6 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
     local sus_pop_mask_window = sus_pop_mask[:,:,1:curr_t]
     local sample_sizes_non_zero_window = @view sample_sizes[:,:,1:curr_t][sus_pop_mask_window]
 
-    window_param_names = get_params_varnames_all(Int(ceil(curr_t / Δ_βt)))
-    fixed_param_names = get_params_varnames_fix(n_old_betas)
 
     y_data_window = Y[:,:,1:curr_t]
     z_data_window = 💉[1:length(sample_sizes_non_zero_window)]
@@ -1008,85 +926,44 @@ for idx_time_off_by_1 in eachindex(each_end_time[2:end])
             )
 
     # mydramgs = DRAMGS_Sampler(0.234, 0.6; noise_stabiliser = true, noise_stabiliser_scaling = 1e-5, max_delayed_rejection_steps = 2, rejection_step_sizes = [0.6, 0.1])
-
-    
-    local global_varnames = (@varname(η),)
-    if n_old_betas == 0
-        local EE_varnames = (@varname(log_β₀_EE), @varname(log_β_EE))
-        local LDN_varnames = (@varname(log_β₀_LDN), @varname(log_β_LDN))
-        local MID_varnames = (@varname(log_β₀_MID), @varname(log_β_MID))
-        local NEY_varnames = (@varname(log_β₀_NEY), @varname(log_β_NEY))
-        local NW_varnames = (@varname(log_β₀_NW), @varname(log_β_NW))
-        local SE_varnames = (@varname(log_β₀_SE), @varname(log_β_SE))
-        local SW_varnames = (@varname(log_β₀_SW), @varname(log_β_SW))
-    else
-        local EE_varnames = ( @varname(log_β_EE),)
-        local LDN_varnames = ( @varname(log_β_LDN),)
-        local MID_varnames = ( @varname(log_β_MID),)
-        local NEY_varnames = ( @varname(log_β_NEY),)
-        local NW_varnames = ( @varname(log_β_NW),)
-        local SE_varnames = ( @varname(log_β_SE),)
-        local SW_varnames = ( @varname(log_β_SW),)
-    end
-
-    local global_regional_gibbs_mine = Gibbs(
-        global_varnames => myamgs_η,
-        EE_varnames => myamgsEE,
-        LDN_varnames => myamgsLDN,
-        MID_varnames => myamgsMID,
-        NEY_varnames => myamgsNEY,
-        NW_varnames => myamgsNW,
-        SE_varnames => myamgsSE,
-        SW_varnames => myamgsSW
-    )
     if(isfile(string(outdir, "chains$idx_time.jld2")))
         local chain_file = JLD2.load(string(outdir, "chains$idx_time.jld2"))
         list_chains[idx_time] = chain_file["chains"]
         runtimes_precomp[idx_time] = chain_file["runtime_init_precomp"]
         algorithm_times[idx_time] = chain_file["runtime_init"]
     else
-        # Get the time to compile the Sampler
-        t1_precomp = time_ns()
-        sample(
-            model_window,
-            PracticalFiltering.PracticalFilter(
-                fixed_param_names,
-                window_param_names,
-                list_chains[idx_time - 1][end,:,:],
-                global_regional_gibbs_mine),
-            MCMCThreads(),
-            3,
-            n_chains,
-            num_warmup = 2,
-            thinning = 1,
-            discard_initial = 0
-        )
-        t2_precomp = time_ns()
-        runtimes_precomp[idx_time] = convert(Int64, t2_precomp - t1_precomp)
-    
-        t1 = time_ns()
-        list_chains[idx_time] = sample(
-            model_window,
-            PracticalFiltering.PracticalFilter(
-                fixed_param_names,
-                window_param_names,
-                list_chains[idx_time - 1][end,:,:],
-                global_regional_gibbs_mine
-            ),
-            MCMCThreads(),
-            1,
-            # 1100,
-            n_chains;
-            discard_initial = discard_init,
-            # discard_initial = 0,
-            # num_warmup = 1000,
-            num_warmup = n_warmup_samples,
-            # thinning = 25
-        )
-        t2 = time_ns()
-        algorithm_times[idx_time] = convert(Int64, t2 - t1)
-        JLD2.jldsave(string(outdir, "chains$idx_time.jld2"), chains = list_chains[idx_time], runtime_init_precomp = runtimes_precomp[idx_time], runtime_init = algorithm_times[idx_time])
-    end 
+      # Get the time to compile the Sampler
+      t1_precomp = time_ns()
+      sample(
+          model_window,
+          global_regional_gibbs_mine,
+          MCMCThreads(),
+          3,
+          n_chains,
+          num_warmup = 2,
+          thinning = 1,
+          discard_initial = 0
+      )
+      t2_precomp = time_ns()
+      runtimes_precomp[idx_time] = convert(Int64, t2_precomp - t1_precomp)
+
+      t1 = time_ns()
+      list_chains[idx_time] = sample(
+          model_window,
+          global_regional_gibbs_mine,
+          MCMCThreads(),
+          200,
+          n_chains;
+          discard_initial = discard_init[idx_time],
+          # discard_initial = 0,
+          # num_warmup = 1000,
+          num_warmup = n_warmup_samples,
+          thinning = 25
+      )
+      t2 = time_ns()
+      algorithm_times[idx_time] = convert(Int64, t2 - t1)
+       JLD2.save(string(outdir, "chains$idx_time.jld2"), "chains", list_chains[idx_time], "runtime_init_precomp", runtimes_precomp[idx_time], "runtime_init", algorithm_times[idx_time])
+    end
     # est_lj = logjoint(model_window, list_chains[idx_time][:,:,:])
 
     # Correct complicated indices
