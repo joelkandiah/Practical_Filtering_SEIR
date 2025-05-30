@@ -20,8 +20,9 @@ using Tullio
 using SparseArrays
 using AMGS
 using JLD2
+using Distributed
 
-@assert length(ARGS) == 3 "Please provide the path to the TOML file as an argument."
+@assert length(ARGS) == 4 "Please provide the path to the TOML file as an argument."
 
 # Load the TOML file
 config_path = ARGS[1]
@@ -43,7 +44,7 @@ const tmax = config["tmax"]
 const seed_idx  = parse(Int, ARGS[2])
 
 # Get the seed for the current portion of the run
-    const seed_array_idx = parse(Int, ARGS[3])
+const seed_array_idx = parse(Int, ARGS[3])
 
 # Set the random seed for reproducibility (of data)
 Random.seed!(seeds_list[seed_idx])
@@ -56,9 +57,23 @@ if !isdir(output_dir)
     mkpath(output_dir)
 end
 
-# Initialise the model parameters
-const tspan = (0.0, tmax)
-const obstimes = 1.0:1.0:tmax
+# Read the previous chain
+const prev_chain_path = ARGS[4]
+if isfile(string(output_dir,"$prev_chain_path"))
+    prev_chain_dat = JLD2.jldopen(string(output_dir,"$prev_chain_path"), "r") do file
+        (file["initial_sample"], file["Y"], file["💉"], file["d_I"], file["obstimes"])
+    end
+else
+    prev_chain_dat = nothing
+    @error "Previous chain file does not exist: $prev_chain_path"
+end
+
+prev_chain = prev_chain_dat[1]
+Y = prev_chain_dat[2]
+💉 = prev_chain_dat[3]
+d_I = prev_chain_dat[4]
+prev_max_obstime = maximum(prev_chain_dat[5])
+
 const NA_N = [74103.0, 318183.0, 804260.0, 704025.0, 1634429.0, 1697206.0, 683583.0, 577399.0]
 const NA = length(NA_N)
 const N_pop = sum(NA_N)
@@ -66,48 +81,12 @@ const N_pop = sum(NA_N)
 const I0_μ_prior = -9.5
 const trans_unconstrained_I0 = Bijectors.Logit(1.0 / N_pop, NA_N[5] / N_pop)
 
-const I0_sv = rand(Normal(I0_μ_prior, 0.5)) |> Bijectors.Inverse(trans_unconstrained_I0) |> x -> x * N_pop
-
-I0 = zeros(NA)
-I0[5] = I0_sv
-u0 = zeros(7, NA)
-u0[1, :] = NA_N .- I0
-u0[4,:] = I0
-
+# Initialise the model parameters
 const inv_γ = 10
-const inv_σ = 3
-
 const γ = 1 / inv_γ
-const σ = 1 / inv_σ
 
-const ψ_dist = Gamma(20, 0.001)
-const ψ = rand(ψ_dist)
-
-const m_base = 1.0
-const m_1 = 0.6
-const m_2 = 0.4
-
-sus_M = Matrix{Float64}(undef, NA, NA)
-
-@assert NA == 8 "The number of age groups (NA) must be 8."
-sus_M[1:3, :] .= m_1
-sus_M[4:7, :] .= m_base
-sus_M[8, :] .= m_2
-
-# Set parameters for inference and draw betas from the prior
 const βσ = 0.15
-true_beta = repeat([NaN], Integer(ceil(tmax / Δ_βt))+1)
-true_beta[1] = 1.0
 
-for i in 2:(length(true_beta)-1)
-    true_beta[i] = exp(log(true_beta[i-1]) + rand(Normal(0.0, βσ)))
-end
-true_beta[end] = true_beta[end-1] # Remove the last value to match the length of knots
-
-knots = collect(0.0:Δ_βt:tmax)
-knots = (knots[end] == tmax) ? knots : vcat(knots, tmax)
-
-const K = length(knots)
 const C = readdlm("ContactMats/england_8ag_contact_ldwk1_20221116_stable_household.txt") # Load the contact matrix
 
 # Construct an ODE for the SEIR model
@@ -147,20 +126,6 @@ function sir_tvp_ode!(du::Array{T1}, u::Array{T2}, p_, t) where {T1 <: Real, T2 
     end
 end;
 
-# Define the initial R0
-R0_num = 1 + (ψ * inv_σ * 0.5)
-R0_denom = 1 - ( 1 / ((1 + (ψ * inv_γ * 0.5))^2))
-a0_num = ψ * inv_γ * (R0_num^2) / R0_denom
-
-β_func = ConstantInterpolation(true_beta, knots)
-
-a0_denom = β_func(0.0) * 0.1 * inv_γ * eigmax(diagm(u0[1,:]) * (sus_M .* C))
-
-a0 = a0_num / a0_denom
-
-p = [γ, σ, N_pop, a0];
-
-
 struct idd_params_struct{T <: Real, T3 <: DataInterpolations.AbstractInterpolation, T4 <: Real, T5 <: Real,T6 <: Real, T7 <: Real}
     params_floats::Vector{T}
     β_function::T3
@@ -170,39 +135,6 @@ struct idd_params_struct{T <: Real, T3 <: DataInterpolations.AbstractInterpolati
     cache_beta::T6
 end
 
-my_infection = zeros(NA)
-my_infectious_1 = zeros(NA)
-my_infectious_2 = zeros(NA)
-my_recovery_1 = zeros(NA)
-my_recovery_2 = zeros(NA)
-my_b = zeros(NA)
-
-my_βt = zero(Float64)
-
-params_data = idd_params_struct{Float64, DataInterpolations.AbstractInterpolation, Float64, Float64, Float64, Float64}(
-    p,
-    β_func,
-    C,
-    sus_M,
-    [my_infection, my_infectious_1, my_infectious_2, my_recovery_1, my_recovery_2, my_b],
-    my_βt
-)
-
-# Initialise the specific values for the ODE system and solve
-prob_ode = ODEProblem{true}(sir_tvp_ode!, u0, tspan, params_data);
-
-# Define the ODE solver and solve the problem
-const sol = solve(prob_ode, Tsit5(), saveat=obstimes, tstops = knots, d_discontinuities = knots);
-
-# Plot the infection curve
-plot(stack(map(x -> x[4,:] + x[5,:], sol.u))')
-
-# Find the cumulative number of infections
-const I_dat = Array(sol(obstimes))[4,:,:] + Array(sol(obstimes))[5,:,:]
-const R_dat = Array(sol(obstimes))[6,:,:]
-const I_dat_2 = Array(sol(obstimes))[7,:,:]
-
-# Define a function to calculate the adjacent differences
 function adjdiff(ary::AbstractArray{T, 1}) where T
     ary1 = copy(ary)
     ary1[2:end] .-= ary1[1:end-1]
@@ -216,7 +148,12 @@ function rowadjdiff(ary::AbstractArray{T, 2}) where T
     return ary1
 end
 
-const X = rowadjdiff(I_dat_2)
+# Function to construct Negative binomial with properties matching those in Birrell et. al (2021)
+function NegativeBinomial3(μ, ϕ)
+    p = 1/(1+ϕ)
+    r = μ / ϕ
+    return NegativeBinomial(r, p)
+end
 
 # Define Gamma distribution by mean and variance
 function Gamma_mean_sd_dist(μ, σ)
@@ -244,8 +181,8 @@ inf_to_hosp_array_cdf = adjdiff(inf_to_hosp_array_cdf)
 # Function which creates a matrix to calculate the discrete convolution (multiply convolution matrix by new infections vector to get the mean number of (eligible) new hospitalisations)
 
 function construct_pmatrix(
-    v::Vector{T} = inf_to_hosp_array_cdf,
-    l = length(obstimes)) where T
+    v::Vector{T},
+    l) where T
 
     rev_v = @view v[end:-1:1]
     len_v = length(rev_v)
@@ -260,53 +197,8 @@ end
 
 const IFR_vec = [0.0000078, 0.0000078, 0.000017, 0.000038, 0.00028, 0.0041, 0.025, 0.12]
 
-# Evaluate the mean number of hospitalisations
-const conv_mat = construct_pmatrix(;)
-const Y_mu = (conv_mat * (IFR_vec .* X)')'
-
-# Function to construct Negative binomial with properties matching those in Birrell et. al (2021)
-function NegativeBinomial3(μ, ϕ)
-    p = 1/(1+ϕ)
-    r = μ / ϕ
-    return NegativeBinomial(r, p)
-end
-
-const η = rand(Gamma(1.0, 0.2)) # Randomly sample η from a Gamma distribution
-
-# Draw sample of hospitalisations from the Negative Binomial distribution
-const Y = @. rand(NegativeBinomial3(Y_mu + 1e-3, η))
-
-# Plot mean hospitalisations and sampled hospitalisations
-StatsPlots.scatter(obstimes, Y', label="Sampled Hospitalisations", markersize=2, legend = false, alpha = 0.3)
-StatsPlots.plot!(obstimes, Y_mu', label="Mean Hospitalisations", linewidth=2, color=:red)
-plot!(size = (1200, 800))
-
-const sero_sens = 0.7659149
-const sero_spec = 0.9430569
-
 sample_sizes = readdlm("Serosamples_N/region_1.txt", Int64)
-
-sample_sizes = sample_sizes[1:length(obstimes), :]
 sample_sizes = permutedims(sample_sizes, (2, 1))
-
-const sus_pop = stack(map(x -> x[1,:], sol(obstimes)))
-const sus_pop_mask = sample_sizes .!= 0
-const sus_pop_samps = @view (sus_pop ./ NA_N)[sus_pop_mask]
-const sample_sizes_non_zero = @view sample_sizes[sus_pop_mask]
-
-const 💉 = @. rand(
-    Binomial(
-        sample_sizes_non_zero,
-        (sero_sens * (1 - (sus_pop_samps))) + ((1-sero_spec) * (sus_pop_samps))
-    )
-)
-
-obs_exp = zeros(NA, length(obstimes))
-
-obs_exp[sus_pop_mask] = 💉 ./ sample_sizes_non_zero
-
-StatsPlots.scatter(1:length(obstimes), obs_exp', legend = false, alpha = 0.3)
-plot!(size = (1200, 800), label="Seroprevalence", markersize=2, color=:blue)
 
 @model function bayescomp_model(
     K,
@@ -485,17 +377,43 @@ plot!(size = (1200, 800), label="Seroprevalence", markersize=2, color=:blue)
 
 end
 
-knots_window = collect(0.0:Δ_βt:Window_size)
-knots_window = (knots_window[end] == Window_size) ? knots_window : vcat(knots_window, Window_size)
-K_window = length(knots_window)
-obstimes_window = 1.0:1.0:Window_size
-conv_mat_window = construct_pmatrix(inf_to_hosp_array_cdf, length(obstimes_window))
+end_time = (prev_max_obstime + Δ_βt) > tmax ? tmax : (prev_max_obstime + Δ_βt)
 
+knots_window = collect(0.0:Δ_βt:end_time)
+knots_window = (knots_window[end] == end_time) ? knots_window : vcat(knots_window, end_time)
+K_window = length(knots_window)
+obstimes_window = 1.0:1.0:end_time
+conv_mat_window = construct_pmatrix(inf_to_hosp_array_cdf, length(obstimes_window))
+const sus_pop_mask = sample_sizes .!= 0
 sus_pop_mask_window = sus_pop_mask[:, 1:length(obstimes_window)]
 sample_sizes_non_zero_window = @view sample_sizes[:,1:length(obstimes_window)][sus_pop_mask_window]
 
+sus_M = Matrix{Float64}(undef, NA, NA)
+p = [zero(Float64), zero(Float64), N_pop, zero(Float64)]
+β_func = ConstantInterpolation(zeros(Float64, K_window), knots_window)
+
+my_infection = zeros(NA)
+my_infectious_1 = zeros(NA)
+my_infectious_2 = zeros(NA)
+my_recovery_1 = zeros(NA)
+my_recovery_2 = zeros(NA)
+my_b = zeros(NA)
+
+my_βt = zero(Float64)
+
+params_data = idd_params_struct{Float64, DataInterpolations.AbstractInterpolation, Float64, Float64, Float64, Float64}(
+    p,
+    β_func,
+    C,
+    sus_M,
+    [my_infection, my_infectious_1, my_infectious_2, my_recovery_1, my_recovery_2, my_b],
+    my_βt
+)
+
+u0 = zeros(Float64, 7, NA)
+
 # Initialise the ODE problem for the window
-prob_ode_window = ODEProblem{true}(sir_tvp_ode!, u0, (0.0, Window_size), params_data);
+prob_ode_window = ODEProblem{true}(sir_tvp_ode!, u0, (0.0, end_time), params_data);
 
 # Define the model
 model_window_unconditioned = bayescomp_model(
@@ -536,26 +454,138 @@ const my_gibbs = Gibbs(
     global_varnames => myamgs_global,
     region_varnames => myamgs_region)
 
-model_window_fixed = DynamicPPL.fix(model_window, (d_I = inv_σ - 2,))
+model_window_fixed = DynamicPPL.fix(model_window, (d_I = d_I,))
 
-initial_sample = sample(model_window_fixed, my_gibbs, MCMCThreads(), 100, 1; num_warmup = 10, discard_initial = 0, progress = false, model_check = true)
-initial_sample = sample(model_window_fixed, my_gibbs, MCMCThreads(), n_samples, n_chains; num_warmup = n_warmup_samples, discard_initial = 0, progress = false, model_check = false)
+params_varnames_all = collect(keys(VarInfo(model_window_fixed))) 
+get_params_varnames_fix = function(n_old_betas)
+    params_return = Vector{Turing.VarName}()
+    if (n_old_betas >= 0) append!(params_return, [@varname(logit_I₀)]) end
+    if (n_old_betas >= 1) append!(params_return, [@varname(ψ)]) end
+    if (n_old_betas >= 2) append!(params_return, [@varname(log_β[beta_idx]) for beta_idx ∈ 1:(n_old_betas-1)]) end
+
+    return params_return
+end 
+
+n_old_betas = Int(floor((end_time - Window_size) / Δ_βt))
+window_betas = Int(ceil((end_time / Δ_βt)))
+fixed_varnames = get_params_varnames_fix(n_old_betas)
+
+
+# Write the timing callback
+Base.@kwdef struct Timings{A}
+    times::A = Vector{UInt64}()
+end
+
+function (callback::Timings)(
+    rng,
+    model,
+    sampler,
+    sample,
+    state,
+    iteration;
+    kwargs...,
+    )
+    time = time_ns()  # Get the current time in nanoseconds
+    if iteration == 1
+        # Initialize the times vector on the first iteration
+        empty!(callback.times)
+    end
+    
+    # Store the time for this iteration
+    push!(callback.times, time)
+    return nothing
+end
+
+callback = Timings([])
+
+# write the parallel loop
+@assert  Threads.nthreads() >= n_chains
+n_chunks = n_chains
+interval = 1:n_chunks
+rngs = [deepcopy(Random.default_rng()) for _ in interval]
+models = [deepcopy(model_window_fixed) for _ in interval]
+samplers = [deepcopy(my_gibbs) for _ in interval]
+pf_samplers = [PracticalFiltering.PracticalFilter(
+    fixed_varnames,
+    params_varnames_all,
+    prev_chain[end,:,i],
+    samplers[i]) for i in interval]
+callbacks = [deepcopy(callback) for _ in interval]
+
+chains = Vector{Any}(undef,n_chains)
+
+seeds = rand(Random.default_rng(), UInt, n_chains)
+
+barrier = Ref{Bool}(false)
+init_time = Ref{UInt64}(0)
+completed_count = Threads.Atomic{Int}(0)
+
+Distributed.@sync begin
+    Distributed.@async begin
+        Distributed.@sync for (i, _rng, _model, _sampler, _callback) in
+            zip(1:n_chunks, rngs, models, pf_samplers, callbacks)
+            Threads.@spawn begin
+                Random.seed!(_rng, seeds[i])
+                @inbounds chains[i] = sample(
+                    _rng,
+                    _model,
+                    _sampler,
+                    MCMCSerial(),
+                    20,
+                    1;
+                    num_warmup = 10,
+                    discard_initial = 0,
+                    progress = false,
+                    callback = _callback
+                )
+                count = Threads.atomic_add!(completed_count, 1) + 1
+                if count == n_chunks
+                    barrier[] = true  # Set the barrier to true when all threads are done
+                    init_time[] = time_ns()  # Record the initialization time
+                    println("Threadid = $i")
+                end
+
+                while !barrier[]
+                    yield()  # Wait until all threads have completed
+                end
+
+                # After all threads have completed, we can proceed with the sampling
+                @inbounds chains[i] = sample(
+                    _rng,
+                    _model,
+                    _sampler,
+                    MCMCSerial(),
+                    n_samples,
+                    1;
+                    num_warmup = n_warmup_samples,
+                    discard_initial = discard_init,
+                    progress = false,
+                    callback = _callback
+                )
+            end
+        end
+    end
+end
+
+using AbstractMCMC
+combined_chains = AbstractMCMC.chainsstack(AbstractMCMC.tighten_eltype(chains))
+
 
 # logliks = logjoint(model_window_fixed, initial_sample)
 
-JLD2.jldsave(string(output_dir, "initial_chain_$(Integer(maximum(obstimes)))_$(Integer(maximum(obstimes_window))).jld2"), initial_sample = initial_sample, Y = Y, 💉 = 💉, d_I = inv_σ - 2, β = true_beta, m_1 = m_1, m_2 = m_2, η = η, sero_sens = sero_sens, sero_spec = sero_spec, obstimes = obstimes_window)
+JLD2.jldsave(string(output_dir, "chain_sw_$(Integer(tmax))_$(Integer(maximum(obstimes_window))).jld2"), initial_sample = combined_chains, Y = Y, 💉 = 💉, d_I = d_I, timings = callbacks, init_time = init_time, obstimes = obstimes_window)
+
 
 # To do
 # Split the code into two
 #  Section 1: Runs model with 4 chains and samples every n iterations
 #  Section 2: Runs model with 25 chains (depends on the array of seeds index)
-
+#
 #  Note also need to change code to make use of the Timings object we were interested in testing
 #  Note make sure works on the HPC
-
+#
 #  Note (maybe just write the practical filtering code manually... use the code from the sampler to help write this)
 #  Worth testing convergence????
-
+#
 #  Note need to do this for multiple example chains
 #  Also remember to use starting points for both sets of chains
-

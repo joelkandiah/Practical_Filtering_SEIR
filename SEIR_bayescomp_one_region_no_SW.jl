@@ -512,7 +512,7 @@ prev_ests_params = map(i ->
         1:n_chains)
 
 chains = Vector{Any}(undef,n_chains)
-
+Random.seed!(seeds_array_list[seed_array_idx])
 seeds = rand(Random.default_rng(), UInt, n_chains)
 
 init_time = time_ns()
