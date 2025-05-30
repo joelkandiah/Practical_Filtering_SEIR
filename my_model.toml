@@ -1,0 +1,11 @@
+seeds_list = [1234, 1357, 2358, 3581]
+seeds_array_list = [156, 167, 189, 190, 205, 210, 220, 230, 240]
+
+Delta_beta_t = 40
+Window_size = 220
+n_chains = 4
+discard_initial = 0
+n_samples = 100
+n_warmup = 20
+tmax = 400
+
