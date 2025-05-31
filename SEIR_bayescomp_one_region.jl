@@ -43,7 +43,7 @@ const tmax = config["tmax"]
 const seed_idx  = parse(Int, ARGS[2])
 
 # Get the seed for the current portion of the run
-    const seed_array_idx = parse(Int, ARGS[3])
+const seed_array_idx = parse(Int, ARGS[3])
 
 # Set the random seed for reproducibility (of data)
 Random.seed!(seeds_list[seed_idx])
@@ -537,6 +537,8 @@ const my_gibbs = Gibbs(
     region_varnames => myamgs_region)
 
 model_window_fixed = DynamicPPL.fix(model_window, (d_I = inv_σ - 2,))
+
+Random.seed!(seeds_array_list[seed_array_idx])
 
 initial_sample = sample(model_window_fixed, my_gibbs, MCMCThreads(), 100, 1; num_warmup = 10, discard_initial = 0, progress = false, model_check = true)
 initial_sample = sample(model_window_fixed, my_gibbs, MCMCThreads(), n_samples, n_chains; num_warmup = n_warmup_samples, discard_initial = 0, progress = false, model_check = false)
