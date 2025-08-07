@@ -7,3 +7,4 @@ oldplots/
 out/
 *.gz
 *.jld2
+*.png
