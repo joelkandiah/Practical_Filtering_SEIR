@@ -15,30 +15,31 @@ using SparseArrays
 using Plots.PlotMeasures
 using PracticalFiltering
 using DelimitedFiles
+using DynamicPPL
 
 @assert length(ARGS) == 8
 
 # Read parameters from command line for the varied submission scripts
-seed_idx = parse(Int, ARGS[1])
-Δ_βt = parse(Int, ARGS[2])
-Window_size = parse(Int, ARGS[3])
-Data_update_window = parse(Int, ARGS[4])
-n_chains = parse(Int, ARGS[5])
-discard_init = parse(Int, ARGS[6])
-n_warmup_samples = parse(Int, ARGS[7])
-tmax = parse(Float64, ARGS[8])
+const seed_idx = parse(Int, ARGS[1])
+const Δ_βt = parse(Int, ARGS[2])
+const Window_size = parse(Int, ARGS[3])
+const Data_update_window = parse(Int, ARGS[4])
+const n_chains = parse(Int, ARGS[5])
+const discard_init = parse(Int, ARGS[6])
+const n_warmup_samples = parse(Int, ARGS[7])
+const tmax = parse(Float64, ARGS[8])
 
 # List the seeds to generate a set of data scenarios (for reproducibility)
-seeds_list = [1234, 1357, 2358, 3581]
+const seeds_list = [1234, 1357, 2358, 3581]
 
 # Set seed
 Random.seed!(seeds_list[seed_idx])
 
-n_threads = Threads.nthreads()
+const n_threads = Threads.nthreads()
 
 # Set and Create locations to save the plots and Chains
-outdir = string("Results/10bp pop_reg/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
-tmpstore = string("Chains/10bp pop_reg/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+const outdir = string("Results/10bp pop_reg/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
+const tmpstore = string("Chains/10bp pop_reg/$Δ_βt","_beta/window_$Window_size/chains_$n_chains/n_threads_$n_threads/Plot attempt $seed_idx/")
 
 if !isdir(outdir)
     mkpath(outdir)
@@ -48,9 +49,9 @@ if !isdir(tmpstore)
 end
 
 # Initialise the model parameters (fixed)
-tspan = (0.0, tmax)
-obstimes = 1.0:1.0:tmax
-NA_N = Matrix(transpose([74103.0 318183.0 804260.0 704025.0 1634429.0 1697206.0 683583.0 577399.0;
+const tspan = (0.0, tmax)
+const obstimes = 1.0:1.0:tmax
+const NA_N = Matrix(transpose([74103.0 318183.0 804260.0 704025.0 1634429.0 1697206.0 683583.0 577399.0;
           122401.0 493480.0 1123981.0 1028009.0 3063113.0 2017884.0 575433.0 483780.0;
           118454.0 505611.0 1284743.0 1308343.0 2631847.0 2708355.0 1085138.0 895188.0;
           92626.0 396683.0 1014827.0 1056588.0 2115517.0 2253914.0 904953.0 731817.0;
@@ -58,28 +59,28 @@ NA_N = Matrix(transpose([74103.0 318183.0 804260.0 704025.0 1634429.0 1697206.0 
           94823.0 412569.0 1085466.0 1022927.0 2175624.0 2338669.0 921243.0 801040.0;
           55450.0 241405.0 633169.0 644122.0 1304392.0 1496240.0 666261.0 564958.0;
 ]))
-NA = size(NA_N)[1]
-NR = size(NA_N)[2]
-N_pop_R = sum(NA_N, dims = 1)[1,:]
-I0_μ_prior = -9.5
-trans_unconstrained_I0 = Bijectors.Logit.(1.0 ./N_pop_R, NA_N[5,:]./ N_pop_R)
-I0_per_reg = (rand(Normal(I0_μ_prior, 0.2), NR)) .|> Bijectors.Inverse.(trans_unconstrained_I0) |> x -> x .* N_pop_R
+const NA = size(NA_N)[1]
+const NR = size(NA_N)[2]
+const N_pop_R = sum(NA_N, dims = 1)[1,:]
+const I0_μ_prior = -9.5
+const trans_unconstrained_I0 = Bijectors.Logit.(1.0 ./N_pop_R, NA_N[5,:]./ N_pop_R)
+const I0_per_reg = (rand(Normal(I0_μ_prior, 0.2), NR)) .|> Bijectors.Inverse.(trans_unconstrained_I0) |> x -> x .* N_pop_R
 I0 = zeros(NA, NR)
 I0[5,:] = I0_per_reg
 u0 = zeros(5,NA,NR)
 u0[1,:,:] = NA_N - I0
 u0[3,:,:] = I0
-inv_γ = 10  
-inv_σ = 3
-γ = 1/ inv_γ
-σ = 1/ inv_σ
+const inv_γ = 10.0  
+const inv_σ = 3.0
+const γ = 1/ inv_γ
+const σ = 1/ inv_σ
 p = [γ, σ ];
 
 
 # Set parameters for inference and draw betas from prior
-β₀σ = 0.15
-β₀μ = 0.14
-βσ = 0.15
+const β₀σ = 0.15
+const β₀μ = 0.14
+const βσ = 0.15
 true_beta = repeat([NaN], Integer(ceil(tmax/ Δ_βt)) + 1, NR)
 true_beta[1,:] = exp.(rand(Normal(log(β₀μ), β₀σ), NR))
 for i in 2:(size(true_beta)[1] - 1)
@@ -155,7 +156,7 @@ sol_ode = solve(prob_ode,
 # Optionally plot the SEIR system
 a = Vector{Plots.Plot}(undef, NR)
 for i in 1:NR
-    a[i] = StatsPlots.plot( stack(map(x -> x[3,:,i], sol_ode.u))',
+    a[i] = StatsPlots.plot(stack(map(x -> x[3,:,i], sol_ode.u))',
         xlabel="Time",
         ylabel="Number",
         linewidth = 1,
@@ -188,7 +189,7 @@ function adjdiff(ary)
 end
 
 # Number of new infections
-X = rowadjdiff3d(I_tot_2)
+const X = rowadjdiff3d(I_tot_2)
 
 # Define Gamma distribution by mean and standard deviation
 function Gamma_mean_sd_dist(μ, σ)
@@ -198,8 +199,8 @@ function Gamma_mean_sd_dist(μ, σ)
 end
 
 # Define helpful distributions (arbitrary choice from sample in RTM)
-incubation_dist = Gamma_mean_sd_dist(4.0, 1.41)
-symp_to_hosp = Gamma_mean_sd_dist(9.0, 8.0666667)
+const incubation_dist = Gamma_mean_sd_dist(4.0, 1.41)
+const symp_to_hosp = Gamma_mean_sd_dist(9.0, 8.0666667)
 
 # Define approximate convolution of Gamma distributions
 # f: Distributions.Gamma x Distributions.Gamma -> Distributions.Gamma
@@ -262,7 +263,7 @@ StatsPlots.plot(a..., layout = (4,2), size = (1200,1800))
 
 
 # Store ODE system parameters in a dictionary and write to a file
-params = Dict(
+const params = Dict(
     "seed" => seeds_list[seed_idx],
     "Window_size" => Window_size,
     "Data_update_window" => Data_update_window,
@@ -285,9 +286,9 @@ params = Dict(
 
 
 # Define Seroprevalence estimates
-sero_sens = 0.7659149
+const sero_sens = 0.7659149
 # sero_sens = 0.999
-sero_spec = 0.9430569
+const sero_spec = 0.9430569
 # sero_spec = 0.999
 
 using DelimitedFiles
@@ -299,10 +300,10 @@ sample_sizes = permutedims(sample_sizes, (2,3,1))
 
 sus_pop = stack(map(x -> x[1,:,:], sol_ode(obstimes)))
 sus_pop_mask = sample_sizes .!= 0
-sus_pop_samps = @view (sus_pop ./ NA_N)[sus_pop_mask]
-sample_sizes_non_zero = @view sample_sizes[sus_pop_mask]
+const sus_pop_samps = @view (sus_pop ./ NA_N)[sus_pop_mask]
+const sample_sizes_non_zero = @view sample_sizes[sus_pop_mask]
 
-💉 = @. rand(
+const 💉 = @. rand(
     Binomial(
         sample_sizes_non_zero,
         (sero_sens * (1 - (sus_pop_samps))) + ((1-sero_spec) * (sus_pop_samps))

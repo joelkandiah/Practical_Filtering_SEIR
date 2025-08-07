@@ -4,3 +4,6 @@ Results/
 *.out
 .vscode/
 oldplots/
+out/
+*.gz
+*.jld2

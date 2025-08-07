@@ -163,6 +163,7 @@ inf_to_hosp = approx_convolve_gamma(incubation_dist,symp_to_hosp)
 inf_to_hosp_array_cdf = cdf(inf_to_hosp,1:160)
 inf_to_hosp_array_cdf[2:end] = adjdiff(inf_to_hosp_array_cdf)
 
+
 # Create function to create a matrix to calculate the discrete convolution (multiply convolution matrix by new infections vector to get mean of number of (eligible) hospitalisations per day)
 function construct_pmatrix(
     v = inf_to_hosp_array_cdf,
@@ -172,7 +173,7 @@ function construct_pmatrix(
     for i = 1:(l)
         ret_mat[i, max(begin, i + 1 - length(v)):min(i, end)] .= rev_v[max(begin, length(v)-i+1):end]        
     end
-    return ret_mat
+    return sparse(ret_mat)
 end
 
 # Evaluate mean number of hospitalisations (using proportion of 0.3)

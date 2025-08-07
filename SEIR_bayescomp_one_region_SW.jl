@@ -17,7 +17,6 @@ using PracticalFiltering
 using DelimitedFiles
 using DynamicPPL
 using Tullio
-using SparseArrays
 using AMGS
 using JLD2
 using Distributed

@@ -417,23 +417,23 @@ plot!(size = (1200, 800), label="Seroprevalence", markersize=2, color=:blue)
         βt_cache
     )
     # Format print each parameter
-    # Println("Parameters:")
-    # Println("logit_I₀ = ", logit_I₀)
-    # Println("I_vec = ", I_vec)
-    # Println("η = ", η)
-    # Println("ψ = ", ψ)
-    # Println("m_1 = ", m_1)
-    # Println("m_2 = ", m_2)
-    # Println("d_I = ", d_I)
-    # Println("inv_σ = ", inv_σ)
-    # Println("inv_γ = ", inv_γ)
-    # Println("sus_M = ", sus_M)
-    # Println("β = ", β)
-    # Println("log_β = ", log_β)
-    # Println("sero_sens = ", sero_sens)
-    # Println("sero_spec = ", sero_spec)
-    # Println("a0 = ", a0)
-    # Println("β_function = ", β_function)
+    # println("Parameters:")
+    # println("logit_I₀ = ", logit_I₀)
+    # println("I_vec = ", I_vec)
+    # println("η = ", η)
+    # println("ψ = ", ψ)
+    # println("m_1 = ", m_1)
+    # println("m_2 = ", m_2)
+    # println("d_I = ", d_I)
+    # println("inv_σ = ", inv_σ)
+    # println("inv_γ = ", inv_γ)
+    # println("sus_M = ", sus_M)
+    # println("β = ", β)
+    # println("log_β = ", log_β)
+    # println("sero_sens = ", sero_sens)
+    # println("sero_spec = ", sero_spec)
+    # println("a0 = ", a0)
+    # println("β_function = ", β_function)
 
     # Define the ODE problem
     #tspan = (zero(eltype(obstimes), obstimes[end])
@@ -560,4 +560,3 @@ JLD2.jldsave(string(output_dir, "initial_chain_$(Integer(maximum(obstimes)))_$(I
 
 #  Note need to do this for multiple example chains
 #  Also remember to use starting points for both sets of chains
-

@@ -15,7 +15,7 @@ using SparseArrays
 using Plots.PlotMeasures
 using PracticalFiltering
 using DelimitedFiles
-# using Revise
+using Revise
 
 @assert length(ARGS) == 8
 
@@ -536,8 +536,62 @@ name_map_correct_order = ode_prior.name_map.parameters
 using AMGS
 
 # my_sampler = Turing.Sampler(AMGS.RAM_Sampler(0.234, 0.6))
-my_sampler_AMGS = Turing.Sampler(AMGS.AMGS_Sampler(0.234, 0.6))
+my_sampler_AMGS = AMGS.AMGS_Sampler(0.234, 0.6)
+my_bayes_sampler_AMGS = AMGS.Bayes_AMGS_Sampler(0.234, 100, 1, x -> Int(floor(0.5 * sqrt(2 * x))))
+my_alt_bayes_sampler_AMGS = AMGS.Bayes_AMGS_Sampler(0.234, 100, 1, x -> Int(floor(0.5 *  x)))
+my_alt2_bayes_sampler_AMGS = AMGS.Bayes_AMGS_Sampler(0.234, 100, 1, x -> Int(floor(log(x)/log(2))))
+
 # my_sampler_AMGS_stops = Turing.Sampler(AMGS.AMGS_Stopping_Sampler(0.234, 0.6, 150000, 0.23, 0.24, 3000))
+
+ode_amgs = sample(
+    model_window,
+    my_sampler_AMGS,
+    MCMCThreads(),
+    10000,
+    n_chains,
+    num_warmup = 3000,
+        # n_warmup_samples,
+    discard_initial = 0,
+)
+
+
+ode_bayes_amgs = sample(
+    model_window,
+    my_bayes_sampler_AMGS,
+    MCMCThreads(),
+    10000,
+    n_chains,
+    num_warmup = 0,
+    discard_initial = 0
+)
+
+alt_ode_bayes_amgs = sample(
+    model_window,
+    my_alt_bayes_sampler_AMGS,
+    MCMCThreads(),
+    10000,
+    n_chains,
+    num_warmup = 0,
+    discard_initial = 0
+)
+
+alt2_ode_bayes_amgs = sample(
+    model_window,
+    my_alt2_bayes_sampler_AMGS,
+    MCMCThreads(),
+    10000,
+    n_chains,
+    num_warmup = 0,
+    discard_initial = 0
+)
+
+dens_amgs = logjoint(model_window, ode_amgs)
+dens_bayes_amgs = logjoint(model_window, ode_bayes_amgs)
+dens_bayes_amgs_alt = logjoint(model_window, alt_ode_bayes_amgs)
+
+plot(dens_amgs[5000:7000, :])
+# plot!(dens_bayes_amgs[3000:5000,:])
+plot!(dens_bayes_amgs_alt[5000:7000,:])
 
 # Perform the chosen inference algorithm
 t1_init = time_ns()

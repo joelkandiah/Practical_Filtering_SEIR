@@ -120,8 +120,6 @@ function sir_tvp_ode!(du::Array{T1}, u::Array{T2}, p_, t) where {T1 <: Real, T2 
     end
 end;# Construct an ODE for the SEIR model
 
-
-
 struct idd_params{T <: Real, T2 <: DataInterpolations.AbstractInterpolation, T3 <: Real}
     params_floats::Vector{T}
     β_function::T2

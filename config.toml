@@ -1,0 +1,15 @@
+[opts]
+delta_betat = 40
+Window_size =  120
+Data_update_window = 60
+n_chains = 4
+discard_init = [
+    20000,
+    25000,
+    45000,
+    95000,
+    95000,
+    105000
+]
+n_warmup_samples = 2000
+tmax = 400
